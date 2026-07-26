@@ -81,6 +81,7 @@ export default defineSchema({
 
   // real telemetry for the "Behind the model" sheet
   gemmaLog: defineTable({
+    roomId: v.optional(v.id('rooms')), // scoping: room logs only shown to members
     task: v.string(),
     model: v.string(),
     system: v.string(),

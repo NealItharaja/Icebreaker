@@ -3,7 +3,6 @@
 import { useAction } from 'convex/react';
 import React, { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
-import { useRouter } from 'expo-router';
 import { api } from '../../../convex/_generated/api';
 import { FloorPerson } from '../../store/AppStore';
 import { useTheme } from '../../theme/ThemeContext';
@@ -16,16 +15,11 @@ const openerCache: Record<string, string> = {};
 
 export function NodeSheet({ node, onClose }: { node: FloorPerson | null; onClose: () => void }) {
   const { t } = useTheme();
-  const router = useRouter();
   const openerAction = useAction(api.ai.openerAction);
   const [line, setLine] = useState<string | null>(null);
 
   useEffect(() => {
     if (!node) return;
-    if (!node.met) {
-      setLine('Never played together, so I have nothing on them yet. That is what a room is for.');
-      return;
-    }
     const cacheKey = `${node.key}|${node.overlaps.join(',')}`;
     if (openerCache[cacheKey]) {
       setLine(openerCache[cacheKey]);
@@ -54,8 +48,7 @@ export function NodeSheet({ node, onClose }: { node: FloorPerson | null; onClose
           <View style={{ flex: 1 }}>
             <Text style={{ fontFamily: fonts.heading, fontSize: 23, color: t.text }}>{node.name}</Text>
             <Text style={{ fontFamily: fonts.body, fontSize: 12.5, color: t.textMuted }}>
-              {node.isAi ? 'AI floor-mate' : 'real person'} ·{' '}
-              {node.met ? `played ${node.games} game${node.games === 1 ? '' : 's'} together` : 'never met'}
+              played {node.games} room{node.games === 1 ? '' : 's'} together
             </Text>
           </View>
           <RoundBtn icon="x" size={34} onPress={onClose} />
@@ -88,13 +81,7 @@ export function NodeSheet({ node, onClose }: { node: FloorPerson | null; onClose
             )}
           </View>
         </View>
-        <Btn
-          label={node.met ? 'Say hi' : 'Add to next game'}
-          onPress={() => {
-            onClose();
-            if (!node.met && node.isAi) router.push({ pathname: '/create', params: { invite: node.key } });
-          }}
-        />
+        <Btn label="Say hi" onPress={onClose} />
       </View>
     </Sheet>
   );

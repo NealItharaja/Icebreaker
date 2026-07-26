@@ -46,11 +46,11 @@ export default function Share() {
     }
   }, [roomId, deviceId, s?.room.phase, s?.myShare, shareAction]);
 
-  if (!roomId) return <Redirect href="/home" />;
-  if (s === null) {
-    clearRoom();
-    return <Redirect href="/home" />;
-  }
+  const dead = s === null;
+  useEffect(() => {
+    if (dead) clearRoom();
+  }, [dead, clearRoom]);
+  if (!roomId || dead) return <Redirect href="/home" />;
 
   const me = s?.players.find((p) => p.isMe);
   const pairs: Record<string, string[]> = s?.room.pairs || {};

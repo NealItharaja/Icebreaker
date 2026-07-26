@@ -2,7 +2,7 @@
 // (OPENROUTER_API_KEY) and never ships in the app bundle. Every exchange is
 // logged so the in-app "Behind the model" sheet stays honest.
 
-import { AiSeed, Judgment, NeutralCard, RoundSpec, Spice, FALLBACK_ROUNDS, FALLBACK_MIDS } from './lib';
+import { Judgment, NeutralCard, RoundSpec, FALLBACK_ROUNDS, FALLBACK_MIDS } from './lib';
 
 export const MODEL = () => process.env.GEMMA_MODEL || 'google/gemma-4-31b-it';
 
@@ -258,62 +258,6 @@ export async function draftLies(
   }
 }
 
-export type AiMove = { key: string; answer: string; decoys: string[]; planted: string | null };
-
-export async function aiMoves(
-  log: LogFn,
-  round: RoundSpec,
-  r: number,
-  seeds: AiSeed[],
-  spice: string,
-  n: number,
-): Promise<Record<string, AiMove>> {
-  const system = sys(spice, n);
-  const personas = seeds.map((b) => ({ id: b.key, name: b.name, from: b.from, hobby: b.hobby, vibe: b.vibe }));
-  const user = `Question to the room: "${round.q}" (topic: ${round.topic}). Answer it in character for each person below — short (<=5 words), specific, true to the persona. Also give 2 near-miss decoys per person (same kind of thing as their answer) and 1 planted lie they would choose to trick friends with. Personas: ${JSON.stringify(personas)}. Reply with only JSON: {"moves":[{"id":"...","answer":"...","decoys":["...","..."],"planted":"..."}]}`;
-  const fallback = (): Record<string, AiMove> => {
-    const map: Record<string, AiMove> = {};
-    seeds.forEach((b, i) => {
-      const persona = [b.food, b.snack, b.take][r] || b.snack;
-      const answer = round.live ? round.chips[(i * 3 + r) % round.chips.length] : persona;
-      const pool = round.chips.filter((c) => c.toLowerCase() !== answer.toLowerCase());
-      map[b.key] = {
-        key: b.key,
-        answer,
-        decoys: [pool[(i * 2) % pool.length], pool[(i * 2 + 3) % pool.length]].filter(Boolean),
-        planted: pool[(i * 2 + 5) % pool.length] || null,
-      };
-    });
-    return map;
-  };
-  try {
-    const out = await chat(log, 'aiMoves', system, user, {
-      maxTokens: Math.min(1600, 200 + 90 * seeds.length),
-      temperature: 1.0,
-    });
-    const j = extractJSON<{ moves: { id: string; answer: string; decoys: string[]; planted: string }[] }>(out);
-    const map: Record<string, AiMove> = {};
-    for (const m of j.moves || []) {
-      if (!m.id || !m.answer) continue;
-      const answer = String(m.answer);
-      const seen = [answer.toLowerCase()];
-      const clean = (x: unknown) => {
-        const vv = String(x || '').trim();
-        if (!vv || seen.includes(vv.toLowerCase())) return null;
-        seen.push(vv.toLowerCase());
-        return vv;
-      };
-      const decoys = (m.decoys || []).map(clean).filter((x): x is string => !!x).slice(0, 2);
-      map[m.id] = { key: m.id, answer, decoys, planted: clean(m.planted) };
-    }
-    if (seeds.some((b) => !map[b.key])) throw new Error('missing ai move');
-    return map;
-  } catch (e: any) {
-    await noteFallback(log, 'aiMoves', system, user, e?.message || 'error');
-    return fallback();
-  }
-}
-
 export async function judgeBatch(
   log: LogFn,
   question: string,
@@ -395,16 +339,19 @@ export async function clusterPairs(
 ): Promise<Record<string, string[]>> {
   const { pairKey } = await import('./lib');
   const system = `You find what two people genuinely share, from their answers in a party game. A shared thing can be an exact match or a real category both fit ("both noodle people", "both from the desert"). Short human labels, <=4 words, lowercase. No stretches — an empty list is fine. Reply with only JSON.`;
-  const byName = answersByRound.map((ans, i) => {
+  // positional labels, not display names — two players named Sam must not collide
+  const label = (i: number) => `P${i + 1}`;
+  const legend = players.map((p, i) => ({ id: label(i), name: p.name }));
+  const byLabel = answersByRound.map((ans, i) => {
     const o: Record<string, string> = {};
-    players.forEach((p) => {
-      if (ans[p.id]) o[p.name] = ans[p.id];
+    players.forEach((p, pi) => {
+      if (ans[p.id]) o[label(pi)] = ans[p.id];
     });
     return { question: rounds[i]?.q, answers: o };
   });
   const pairsWanted: { a: string; b: string }[] = [];
-  players.forEach((a, i) => players.slice(i + 1).forEach((b) => pairsWanted.push({ a: a.name, b: b.name })));
-  const user = `Rounds so far: ${JSON.stringify(byName)}. For each pair, list what they share (possibly nothing): ${JSON.stringify(pairsWanted)}. Reply: {"pairs":[{"a":"Name","b":"Name","shared":["label"]}]}`;
+  players.forEach((_, i) => players.slice(i + 1).forEach((__, j) => pairsWanted.push({ a: label(i), b: label(i + 1 + j) })));
+  const user = `Players: ${JSON.stringify(legend)}. Rounds so far (answers keyed by player id): ${JSON.stringify(byLabel)}. For each pair of ids, list what they share (possibly nothing): ${JSON.stringify(pairsWanted)}. Reply, echoing the ids exactly: {"pairs":[{"a":"P1","b":"P2","shared":["label"]}]}`;
   try {
     const raw = await chat(log, 'cluster', system, user, {
       maxTokens: Math.min(2000, 150 + 45 * pairsWanted.length),
@@ -412,10 +359,14 @@ export async function clusterPairs(
     });
     const j = extractJSON<{ pairs: { a: string; b: string; shared: string[] }[] }>(raw);
     const out = { ...fallback };
+    const byId = (l: string) => {
+      const idx = parseInt(String(l).replace(/^P/i, ''), 10) - 1;
+      return Number.isInteger(idx) && idx >= 0 && idx < players.length ? players[idx] : undefined;
+    };
     for (const p of j.pairs || []) {
-      const A = players.find((x) => x.name === p.a);
-      const B = players.find((x) => x.name === p.b);
-      if (!A || !B) continue;
+      const A = byId(p.a);
+      const B = byId(p.b);
+      if (!A || !B || A.id === B.id) continue;
       out[pairKey(A.id, B.id)] = (p.shared || []).map(String).filter(Boolean).slice(0, 4);
     }
     return out;

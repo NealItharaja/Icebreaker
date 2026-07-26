@@ -108,7 +108,7 @@ function GuessCard({ s, spot }: { s: any; spot: any }) {
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const round = s.round;
-  const chosen = s.myMove?.guesses?.[spot.sid];
+  const chosen = s.myMove?.guesses?.[spot.spotId];
   const kicker = round.archetype === 'whose' ? 'an anonymous take' : `about ${spot.name}`;
   const q = round.archetype === 'whose' ? 'Whose take is this?' : round.aboutTemplate.replace('{name}', spot.name);
 
@@ -116,7 +116,7 @@ function GuessCard({ s, spot }: { s: any; spot: any }) {
     if (!roomId || !deviceId || busy || !value.trim()) return;
     setBusy(true);
     try {
-      await submitGuess({ roomId, deviceId, sid: spot.sid, value: value.trim() });
+      await submitGuess({ roomId, deviceId, spotId: spot.spotId, value: value.trim() });
       setDraft('');
     } finally {
       setBusy(false);
@@ -124,7 +124,7 @@ function GuessCard({ s, spot }: { s: any; spot: any }) {
   };
 
   return (
-    <Animated.View key={spot.sid} entering={rise()} style={{ flex: 1, minHeight: 0 }}>
+    <Animated.View key={spot.spotId} entering={rise()} style={{ flex: 1, minHeight: 0 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 11, marginBottom: 14 }}>
         <View style={[{ width: 44, height: 44, borderRadius: 22, overflow: 'hidden' }, sh.sm]}>
           {round.archetype === 'whose' ? (
@@ -191,15 +191,17 @@ function GuessCard({ s, spot }: { s: any; spot: any }) {
 
 export function GuessView({ s }: { s: any }) {
   const { t } = useTheme();
-  const [spectateDone, setSpectateDone] = useState(false);
+  const [spectateDoneR, setSpectateDoneR] = useState<number | null>(null);
   const { tleft, pct } = useCountdown(s.room.deadline, guessMs(s.players.length));
-  const meId = s.meId;
   const humans = s.players.filter((p: any) => !p.isAi);
   const iSealed = !!s.myMove?.sealed;
-  const targets = s.spots.filter((sp: any) => sp.sid !== meId);
-  const guessedCount = targets.filter((sp: any) => s.myMove?.guesses?.[sp.sid]).length;
+  const targets = s.spots.filter((sp: any) => !sp.isMe);
+  const guessedCount = targets.filter((sp: any) => s.myMove?.guesses?.[sp.spotId]).length;
+  // spectate-dismissed is per round — the component stays mounted across rounds
+  const spectateDone = spectateDoneR === s.room.r;
+  const setSpectateDone = () => setSpectateDoneR(s.room.r);
   const showSpectate = iSealed && !spectateDone;
-  const current = showSpectate ? null : targets.find((sp: any) => !s.myMove?.guesses?.[sp.sid]);
+  const current = showSpectate ? null : targets.find((sp: any) => !s.myMove?.guesses?.[sp.spotId]);
   const allDone = !showSpectate && !current;
   const pendingNames = humans.filter((p: any) => !p.isMe && !s.locked[p.id]).map((p: any) => p.name);
   const lockedCount = s.players.filter((p: any) => (p.isMe ? allDone : s.locked[p.id])).length;
@@ -226,9 +228,9 @@ export function GuessView({ s }: { s: any }) {
         </View>
       )}
       {showSpectate ? (
-        <Spectate s={s} onDone={() => setSpectateDone(true)} />
+        <Spectate s={s} onDone={setSpectateDone} />
       ) : current ? (
-        <GuessCard key={current.sid} s={s} spot={current} />
+        <GuessCard key={current.spotId} s={s} spot={current} />
       ) : (
         <WaitCenter
           title={pendingNames.length ? `Waiting on ${pendingNames.join(' and ')}` : 'Closing the round…'}

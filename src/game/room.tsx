@@ -88,11 +88,12 @@ export function useCountdown(deadline: number | null | undefined, totalMs: numbe
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (deadline == null) return;
+    setNow(Date.now()); // a stale `now` from before the deadline existed would inflate the clock
     const iv = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(iv);
   }, [deadline]);
   if (deadline == null) return { tleft: 0, pct: 100 };
-  const leftMs = Math.max(0, deadline - now);
+  const leftMs = Math.max(0, deadline - Math.max(now, Date.now() - 1500));
   return {
     tleft: Math.ceil(leftMs / 1000),
     pct: Math.max(0, Math.min(100, (leftMs / totalMs) * 100)),

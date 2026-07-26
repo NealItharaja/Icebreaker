@@ -196,7 +196,7 @@ export function RevealView({ s, judging }: { s: any; judging: boolean }) {
           size="lg"
           disabled={judging}
           onPress={() => {
-            if (roomId && deviceId) advance({ roomId, deviceId }).catch(() => {});
+            if (roomId && deviceId) advance({ roomId, deviceId, from: 'reveal' }).catch(() => {});
           }}
         />
       </View>

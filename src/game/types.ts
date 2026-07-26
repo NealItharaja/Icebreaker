@@ -1,4 +1,6 @@
-import { Bot, Archetype, Spice } from './data';
+import { Archetype, Spice } from './data';
+
+type Bot = { id: string; name: string; sym: number };
 
 export type PlayerId = string; // 'me' or a bot id
 

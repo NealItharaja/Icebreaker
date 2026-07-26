@@ -5,6 +5,7 @@ import { useQuery } from 'convex/react';
 import React from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { api } from '../../../convex/_generated/api';
+import { useRoomSession } from '../../game/room';
 import { useTheme } from '../../theme/ThemeContext';
 import { fonts } from '../../theme/tokens';
 import { GemmaMark } from '../Avatar';
@@ -13,8 +14,12 @@ import { Kicker, RoundBtn, Sheet } from '../ui';
 
 export function BehindSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { t } = useTheme();
+  const { roomId, deviceId } = useRoomSession();
   const status = useQuery(api.game.gemmaStatus, visible ? {} : 'skip');
-  const data = useQuery(api.game.gemmaLast, visible ? {} : 'skip');
+  const data = useQuery(
+    api.game.gemmaLast,
+    visible ? { roomId: roomId ?? undefined, deviceId: deviceId ?? undefined } : 'skip',
+  );
   const last = data?.last;
   const stats = [
     { v: (status?.model || 'gemma-4').replace('google/', '').replace('-it', ''), k: 'model' },

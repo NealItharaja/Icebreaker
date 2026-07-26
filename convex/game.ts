@@ -5,7 +5,20 @@ import { v } from 'convex/values';
 import { internalMutation, mutation, query } from './_generated/server';
 import { internal } from './_generated/api';
 import type { Doc, Id } from './_generated/dataModel';
-import { ASK_MS, guessMs, randomCode, AI_SEEDS } from './lib';
+import {
+  ASK_MS,
+  computeReveal,
+  FALLBACK_ROUNDS,
+  fallbackCommentary,
+  fallbackPairs,
+  guessMs,
+  PlayerLite,
+  randomCode,
+  SpotLite,
+} from './lib';
+
+const ROUND_RESCUE_MS = 45_000; // a 'writing' round older than this gets the fallback spec
+const JUDGING_RESCUE_MS = 90_000; // a 'judging' phase older than this reveals with pure fallbacks
 
 const MAX_PLAYERS = 7;
 
@@ -53,8 +66,6 @@ export const createRoom = mutation({
     name: v.string(),
     sym: v.number(),
     spice: v.string(),
-    aiCount: v.number(),
-    aiKeys: v.optional(v.array(v.string())), // specific seat-fillers first
   },
   handler: async (ctx, args) => {
     // unique fully-numeric code among active rooms
@@ -91,25 +102,9 @@ export const createRoom = mutation({
       isAi: false,
       order: 0,
     });
-    const aiCount = Math.max(0, Math.min(6, Math.floor(args.aiCount)));
-    const wanted = (args.aiKeys || []).filter((k) => AI_SEEDS.some((s) => s.key === k));
-    const pool = [
-      ...AI_SEEDS.filter((s) => wanted.includes(s.key)),
-      ...AI_SEEDS.filter((s) => !wanted.includes(s.key)),
-    ];
-    for (let i = 0; i < aiCount; i++) {
-      const seed = pool[i];
-      await ctx.db.insert('players', {
-        roomId,
-        deviceId: `ai:${seed.key}`,
-        name: seed.name,
-        sym: seed.sym,
-        isAi: true,
-        order: i + 1,
-      });
-    }
     await ctx.db.insert('rounds', { roomId, r: 0, status: 'writing' });
     await ctx.scheduler.runAfter(0, internal.ai.writeRoundAction, { roomId, r: 0 });
+    await ctx.scheduler.runAfter(ROUND_RESCUE_MS, internal.game.rescueRound, { roomId, r: 0 });
     return { roomId, code };
   },
 });
@@ -236,8 +231,12 @@ export const setSelfMove = mutation({
     if (!move?.sealedAt || move.readyAt) return;
     if (round.spec.archetype === 'tap') {
       const drafts = move.lieDrafts || round.spec.chips.filter((c) => c !== move.answer).slice(0, 3);
-      const decoys = drafts.filter((d) => d !== args.value).slice(0, 2);
-      await ctx.db.patch(move._id, { planted: args.value, decoys, selfMove: args.value, readyAt: Date.now() });
+      // the planted lie must be one of the drafted lies — and never the truth
+      const value = args.value.trim();
+      if (value.toLowerCase() === (move.answer || '').toLowerCase()) return;
+      if (drafts.length && !drafts.some((d) => d.toLowerCase() === value.toLowerCase())) return;
+      const decoys = drafts.filter((d) => d !== value).slice(0, 2);
+      await ctx.db.patch(move._id, { planted: value, decoys, selfMove: value, readyAt: Date.now() });
     } else {
       await ctx.db.patch(move._id, { selfMove: args.value, readyAt: Date.now() });
     }
@@ -249,17 +248,8 @@ async function maybeCloseAsk(ctx: Ctx, room: Doc<'rooms'>) {
   if (room.phase !== 'ask') return;
   const players = await roomPlayers(ctx, room._id);
   const moves = await roundMoves(ctx, room._id, room.r);
-  const humans = players.filter((p) => !p.isAi);
-  const ais = players.filter((p) => p.isAi);
-  const humansDone = humans.every((p) => moves.some((m) => m.playerId === p._id && m.readyAt));
-  if (!humansDone) return;
-  const aiDone = ais.every((p) => moves.some((m) => m.playerId === p._id && m.sealedAt));
-  if (!aiDone) {
-    // humans are ready but Gemma is still answering for the AI seats
-    await ctx.db.patch(room._id, { pendingClose: true });
-    return;
-  }
-  await closeAsk(ctx, room._id);
+  const everyoneDone = players.every((p) => moves.some((m) => m.playerId === p._id && m.readyAt));
+  if (everyoneDone) await closeAsk(ctx, room._id);
 }
 
 async function closeAsk(ctx: Ctx, roomId: Id<'rooms'>) {
@@ -292,17 +282,21 @@ async function closeAsk(ctx: Ctx, roomId: Id<'rooms'>) {
 // ── guess phase ───────────────────────────────────────────────────────────
 
 export const submitGuess = mutation({
-  args: { roomId: v.id('rooms'), deviceId: v.string(), sid: v.id('players'), value: v.string() },
+  // spotId is the spotlight's MOVE id — opaque, so whose-round authors stay
+  // anonymous in every client payload until the reveal
+  args: { roomId: v.id('rooms'), deviceId: v.string(), spotId: v.id('moves'), value: v.string() },
   handler: async (ctx, args) => {
     const room = await getRoom(ctx, args.roomId);
     if (room.phase !== 'guess') return;
     const me = await myPlayer(ctx, args.roomId, args.deviceId);
-    if (!me || me.isAi || me._id === args.sid) return;
+    if (!me || me.isAi) return;
+    const spotMove = await ctx.db.get(args.spotId);
+    if (!spotMove || spotMove.roomId !== args.roomId || spotMove.r !== room.r || !spotMove.sealedAt) return;
+    const sid = spotMove.playerId;
+    if (sid === me._id) return;
     const moves = await roundMoves(ctx, args.roomId, room.r);
-    const spotMove = moves.find((m) => m.playerId === args.sid && m.sealedAt);
-    if (!spotMove) return;
     const mine = moves.find((m) => m.playerId === me._id);
-    const guesses = { ...(mine?.guesses || {}), [args.sid]: args.value.trim().slice(0, 80) };
+    const guesses = { ...(mine?.guesses || {}), [sid]: args.value.trim().slice(0, 80) };
     const spotIds = moves.filter((m) => m.sealedAt && m.playerId !== me._id).map((m) => m.playerId);
     const all = spotIds.every((sidId) => guesses[sidId]);
     const patch = { guesses, lockedAt: all ? Date.now() : undefined };
@@ -322,9 +316,8 @@ async function maybeReveal(ctx: Ctx, room: Doc<'rooms'>) {
   if (room.phase !== 'guess') return;
   const players = await roomPlayers(ctx, room._id);
   const moves = await roundMoves(ctx, room._id, room.r);
-  const humans = players.filter((p) => !p.isAi);
   const sealedIds = new Set(moves.filter((m) => m.sealedAt).map((m) => m.playerId));
-  const done = humans.every((p) => {
+  const done = players.every((p) => {
     const others = [...sealedIds].filter((id) => id !== p._id);
     if (!others.length) return true;
     const m = moves.find((mm) => mm.playerId === p._id);
@@ -338,16 +331,20 @@ async function beginReveal(ctx: Ctx, roomId: Id<'rooms'>) {
   if (room.phase !== 'guess') return;
   await ctx.db.patch(roomId, { phase: 'judging', deadline: null });
   await ctx.scheduler.runAfter(0, internal.ai.revealAction, { roomId, r: room.r });
+  // if the action dies mid-flight, the room still reveals with pure fallbacks
+  await ctx.scheduler.runAfter(JUDGING_RESCUE_MS, internal.game.rescueJudging, { roomId, r: room.r });
 }
 
 // ── advancing ─────────────────────────────────────────────────────────────
 
 export const advance = mutation({
-  args: { roomId: v.id('rooms'), deviceId: v.string() },
+  // `from` is the phase the tapping client was looking at — a second tap
+  // (same player or another phone) no-ops instead of double-advancing
+  args: { roomId: v.id('rooms'), deviceId: v.string(), from: v.string() },
   handler: async (ctx, args) => {
     const room = await getRoom(ctx, args.roomId);
     const me = await myPlayer(ctx, args.roomId, args.deviceId);
-    if (!me) return;
+    if (!me || room.phase !== args.from) return;
     if (room.phase === 'reveal') {
       await ctx.db.patch(args.roomId, { phase: 'stand' });
       return;
@@ -359,6 +356,7 @@ export const advance = mutation({
         if (!round) {
           await ctx.db.insert('rounds', { roomId: args.roomId, r: nextR, status: 'writing' });
           await ctx.scheduler.runAfter(0, internal.ai.writeRoundAction, { roomId: args.roomId, r: nextR });
+          await ctx.scheduler.runAfter(ROUND_RESCUE_MS, internal.game.rescueRound, { roomId: args.roomId, r: nextR });
         }
         const ready = round?.status === 'ready';
         const deadline = ready ? Date.now() + ASK_MS : null;
@@ -386,31 +384,7 @@ export const checkDeadline = internalMutation({
     if (!room || room.phase !== args.phase || room.r !== args.r) return;
     if (room.deadline == null || Date.now() < room.deadline - 250) return;
     if (args.phase === 'ask') {
-      // time's up: whoever sealed plays; AI moves may still be missing on a
-      // total Gemma outage — fall back to chip answers so the round closes
-      const round = await roundDoc(ctx, args.roomId, room.r);
-      const players = await roomPlayers(ctx, args.roomId);
-      const moves = await roundMoves(ctx, args.roomId, room.r);
-      if (round?.spec) {
-        for (const p of players.filter((pp) => pp.isAi)) {
-          if (!moves.some((m) => m.playerId === p._id && m.sealedAt)) {
-            const chips = round.spec.chips;
-            const answer = chips[(p.order * 3 + room.r) % chips.length];
-            const pool = chips.filter((c) => c !== answer);
-            await ctx.db.insert('moves', {
-              roomId: args.roomId,
-              r: room.r,
-              playerId: p._id,
-              answer,
-              sealedAt: Date.now(),
-              decoys: [pool[p.order % pool.length], pool[(p.order + 2) % pool.length]].filter(Boolean),
-              planted: pool[(p.order + 4) % pool.length] || null,
-              selfMove: null,
-              readyAt: Date.now(),
-            });
-          }
-        }
-      }
+      // time's up: whoever sealed plays, everyone else sits this one out
       await closeAsk(ctx, args.roomId);
     } else if (args.phase === 'guess') {
       await beginReveal(ctx, args.roomId);
@@ -422,6 +396,7 @@ export const checkDeadline = internalMutation({
 
 export const logGemma = internalMutation({
   args: {
+    roomId: v.optional(v.id('rooms')),
     task: v.string(),
     model: v.string(),
     system: v.string(),
@@ -433,25 +408,46 @@ export const logGemma = internalMutation({
   },
   handler: async (ctx, args) => {
     await ctx.db.insert('gemmaLog', { ...args, at: Date.now() });
+    // keep the table bounded
+    const oldest = await ctx.db.query('gemmaLog').withIndex('by_at').order('asc').take(60);
+    if (oldest.length === 60) {
+      for (const doc of oldest.slice(0, 20)) await ctx.db.delete(doc._id);
+    }
   },
 });
+
+async function markRoundReady(ctx: Ctx, roomId: Id<'rooms'>, r: number, spec: any) {
+  const round = await roundDoc(ctx, roomId, r);
+  if (!round || round.status === 'ready') return;
+  await ctx.db.patch(round._id, { status: 'ready', spec });
+  const room = await ctx.db.get(roomId);
+  if (room && room.phase === 'ask' && room.r === r && room.deadline == null) {
+    const deadline = Date.now() + ASK_MS;
+    await ctx.db.patch(roomId, { deadline });
+    await ctx.scheduler.runAfter(ASK_MS + 500, internal.game.checkDeadline, {
+      roomId,
+      phase: 'ask',
+      r,
+    });
+  }
+}
 
 export const roundReady = internalMutation({
   args: { roomId: v.id('rooms'), r: v.number(), spec: v.any() },
   handler: async (ctx, args) => {
+    await markRoundReady(ctx, args.roomId, args.r, args.spec);
+  },
+});
+
+/** watchdog: a round stuck in 'writing' (dead action) gets the canned spec */
+export const rescueRound = internalMutation({
+  args: { roomId: v.id('rooms'), r: v.number() },
+  handler: async (ctx, args) => {
     const round = await roundDoc(ctx, args.roomId, args.r);
     if (!round || round.status === 'ready') return;
-    await ctx.db.patch(round._id, { status: 'ready', spec: args.spec });
     const room = await ctx.db.get(args.roomId);
-    if (room && room.phase === 'ask' && room.r === args.r && room.deadline == null) {
-      const deadline = Date.now() + ASK_MS;
-      await ctx.db.patch(args.roomId, { deadline });
-      await ctx.scheduler.runAfter(ASK_MS + 500, internal.game.checkDeadline, {
-        roomId: args.roomId,
-        phase: 'ask',
-        r: args.r,
-      });
-    }
+    if (!room || !room.active) return;
+    await markRoundReady(ctx, args.roomId, args.r, { ...FALLBACK_ROUNDS[args.r] });
   },
 });
 
@@ -464,40 +460,45 @@ export const saveLieDrafts = internalMutation({
   },
 });
 
-export const saveAiMoves = internalMutation({
-  args: {
-    roomId: v.id('rooms'),
-    r: v.number(),
-    moves: v.array(
-      v.object({
-        playerId: v.id('players'),
-        answer: v.string(),
-        decoys: v.array(v.string()),
-        planted: v.union(v.string(), v.null()),
-        selfMove: v.union(v.string(), v.null()),
-      }),
-    ),
-  },
-  handler: async (ctx, args) => {
-    const existing = await roundMoves(ctx, args.roomId, args.r);
-    for (const m of args.moves) {
-      if (existing.some((e) => e.playerId === m.playerId)) continue;
-      await ctx.db.insert('moves', {
+type RevealPayload = {
+  roomId: Id<'rooms'>;
+  r: number;
+  cards: any;
+  scores: Record<string, number>;
+  deltas: Record<string, number>;
+  mid: string;
+  pairs: Record<string, string[]>;
+};
+
+async function commitReveal(ctx: Ctx, args: RevealPayload) {
+  const room = await ctx.db.get(args.roomId);
+  if (!room || room.phase !== 'judging' || room.r !== args.r) return;
+  const prior = await ctx.db
+    .query('reveals')
+    .withIndex('by_room_r', (q: any) => q.eq('roomId', args.roomId).eq('r', args.r))
+    .unique();
+  if (prior) return;
+  await ctx.db.insert('reveals', { roomId: args.roomId, r: args.r, cards: args.cards });
+  await ctx.db.patch(args.roomId, {
+    phase: 'reveal',
+    scores: args.scores,
+    deltas: args.deltas,
+    mid: args.mid,
+    pairs: args.pairs,
+  });
+  // prefetch the next round while the room reads the reveal
+  if (args.r < 2) {
+    const next = await roundDoc(ctx, args.roomId, args.r + 1);
+    if (!next) {
+      await ctx.db.insert('rounds', { roomId: args.roomId, r: args.r + 1, status: 'writing' });
+      await ctx.scheduler.runAfter(0, internal.ai.writeRoundAction, { roomId: args.roomId, r: args.r + 1 });
+      await ctx.scheduler.runAfter(ROUND_RESCUE_MS, internal.game.rescueRound, {
         roomId: args.roomId,
-        r: args.r,
-        playerId: m.playerId,
-        answer: m.answer,
-        sealedAt: Date.now(),
-        decoys: m.decoys,
-        planted: m.planted,
-        selfMove: m.selfMove,
-        readyAt: Date.now(),
+        r: args.r + 1,
       });
     }
-    const room = await ctx.db.get(args.roomId);
-    if (room?.pendingClose) await maybeCloseAsk(ctx, room);
-  },
-});
+  }
+}
 
 export const finishReveal = internalMutation({
   args: {
@@ -510,29 +511,73 @@ export const finishReveal = internalMutation({
     pairs: v.record(v.string(), v.array(v.string())),
   },
   handler: async (ctx, args) => {
+    await commitReveal(ctx, args);
+  },
+});
+
+/** watchdog: a room stuck in 'judging' (dead action) reveals with fallbacks */
+export const rescueJudging = internalMutation({
+  args: { roomId: v.id('rooms'), r: v.number() },
+  handler: async (ctx, args) => {
     const room = await ctx.db.get(args.roomId);
     if (!room || room.phase !== 'judging' || room.r !== args.r) return;
-    const prior = await ctx.db
-      .query('reveals')
-      .withIndex('by_room_r', (q) => q.eq('roomId', args.roomId).eq('r', args.r))
-      .unique();
-    if (prior) return;
-    await ctx.db.insert('reveals', { roomId: args.roomId, r: args.r, cards: args.cards });
-    await ctx.db.patch(args.roomId, {
-      phase: 'reveal',
-      scores: args.scores,
-      deltas: args.deltas,
-      mid: args.mid,
-      pairs: args.pairs,
+    const round = await roundDoc(ctx, args.roomId, args.r);
+    if (!round?.spec) return;
+    const spec = round.spec;
+    const playersDocs = await roomPlayers(ctx, args.roomId);
+    const players: PlayerLite[] = playersDocs.map((p) => ({
+      id: p._id,
+      name: p.name,
+      sym: p.sym,
+      isAi: p.isAi,
+      order: p.order,
+    }));
+    const moves = await roundMoves(ctx, args.roomId, args.r);
+    const spots: SpotLite[] = moves
+      .filter((m) => m.sealedAt)
+      .map((m) => {
+        const p = playersDocs.find((pp) => pp._id === m.playerId)!;
+        return {
+          sid: m.playerId,
+          name: p?.name || '?',
+          sym: p?.sym || 1,
+          truth: m.answer!,
+          decoys: m.decoys || [],
+          planted: m.planted ?? null,
+          selfMove: m.selfMove ?? null,
+        };
+      });
+    const guesses: Record<string, string | undefined> = {};
+    players.forEach((g) => {
+      spots.forEach((sp) => {
+        if (g.id === sp.sid) return;
+        guesses[`${g.id}|${sp.sid}`] = moves.find((m) => m.playerId === g.id)?.guesses?.[sp.sid];
+      });
     });
-    // prefetch the next round while the room reads the reveal
-    if (args.r < 2) {
-      const next = await roundDoc(ctx, args.roomId, args.r + 1);
-      if (!next) {
-        await ctx.db.insert('rounds', { roomId: args.roomId, r: args.r + 1, status: 'writing' });
-        await ctx.scheduler.runAfter(0, internal.ai.writeRoundAction, { roomId: args.roomId, r: args.r + 1 });
-      }
+    const { cards, scores, deltas } = computeReveal(
+      { r: args.r, archetype: spec.archetype, players, spots, guesses },
+      room.scores,
+    );
+    cards.forEach((c) => (c.gemma = fallbackCommentary(spec.archetype, c)));
+    const answersByRound: Record<string, string>[] = [];
+    const allMoves = await ctx.db
+      .query('moves')
+      .withIndex('by_room_r', (q: any) => q.eq('roomId', args.roomId))
+      .collect();
+    for (let rr = 0; rr <= args.r; rr++) {
+      const byId: Record<string, string> = {};
+      allMoves.filter((m: any) => m.r === rr && m.answer).forEach((m: any) => (byId[m.playerId] = m.answer));
+      answersByRound.push(byId);
     }
+    await commitReveal(ctx, {
+      roomId: args.roomId,
+      r: args.r,
+      cards,
+      scores,
+      deltas,
+      mid: '',
+      pairs: fallbackPairs(players, answersByRound),
+    });
   },
 });
 
@@ -617,10 +662,12 @@ export const roomState = query({
       const m = moves.find((mm) => mm.playerId === p._id);
       sealed[p._id] = !!m?.sealedAt;
       ready[p._id] = !!m?.readyAt;
-      locked[p._id] = p.isAi ? true : !!m?.lockedAt;
+      locked[p._id] = !!m?.lockedAt;
     });
 
-    // guessable spotlights (never reveals which option is the truth)
+    // guessable spotlights, keyed by opaque move id — never reveals which
+    // option is the truth, and whose-round authors stay anonymous
+    const whose = round?.spec?.archetype === 'whose';
     const spots =
       room.phase === 'guess' || room.phase === 'judging'
         ? moves
@@ -634,14 +681,25 @@ export const roomState = query({
                       .sort((a, b) => (a + m.playerId).length - (b + m.playerId).length || a.localeCompare(b))
                   : undefined;
               return {
-                sid: m.playerId,
-                name: p?.name || '?',
-                sym: p?.sym || 1,
-                quote: round?.spec?.archetype === 'whose' ? m.answer : undefined,
+                spotId: m._id,
+                isMe: !!me && m.playerId === me._id,
+                name: whose ? undefined : p?.name || '?',
+                sym: whose ? undefined : p?.sym || 1,
+                quote: whose ? m.answer : undefined,
                 options: opts,
               };
             })
         : [];
+    // my guesses, re-keyed by the opaque spot ids
+    const guessesBySpot: Record<string, string> = {};
+    if (myMove?.guesses) {
+      moves
+        .filter((m) => m.sealedAt)
+        .forEach((m) => {
+          const gv = myMove.guesses?.[m.playerId];
+          if (gv) guessesBySpot[m._id] = gv;
+        });
+    }
 
     return {
       room: {
@@ -680,7 +738,7 @@ export const roomState = query({
             planted: myMove.planted ?? null,
             selfMove: myMove.selfMove ?? null,
             ready: !!myMove.readyAt,
-            guesses: myMove.guesses ?? {},
+            guesses: guessesBySpot,
             locked: !!myMove.lockedAt,
           }
         : null,
@@ -720,11 +778,18 @@ export const gemmaStatus = query({
 });
 
 export const gemmaLast = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { roomId: v.optional(v.id('rooms')), deviceId: v.optional(v.string()) },
+  handler: async (ctx, args) => {
     const recent = await ctx.db.query('gemmaLog').withIndex('by_at').order('desc').take(40);
-    const last = recent[0] || null;
     const live = recent.filter((l) => l.mode === 'live').map((l) => l.ms).sort((a, b) => a - b);
+    // full prompts only for rooms you're actually in — otherwise the latest
+    // non-room call (home notices, map openers) so nothing leaks across rooms
+    let member = false;
+    if (args.roomId && args.deviceId) {
+      member = !!(await myPlayer(ctx, args.roomId, args.deviceId));
+    }
+    const last =
+      recent.find((l) => (l.roomId ? member && l.roomId === args.roomId : true)) || null;
     return {
       last,
       p50: live.length ? live[Math.floor(live.length / 2)] : null,

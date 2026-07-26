@@ -58,6 +58,10 @@ function ScoreRow({ rank, sym, name, score, pct, leader, blurb, delay }: any) {
   );
 }
 
+// synchronous record-once guard — stale Final screens left in the nav stack
+// race the AsyncStorage flag, so the first line of defense is in-memory
+const recordedRooms = new Set<string>();
+
 export default function Final() {
   const { t, sh } = useTheme();
   const s = useRoom();
@@ -69,9 +73,11 @@ export default function Final() {
   // the night survives: merge this real room into the floor map exactly once
   useEffect(() => {
     if (!s || s.room.phase !== 'final' || !roomId || !s.meId) return;
+    if (recordedRooms.has(roomId)) return;
+    recordedRooms.add(roomId);
     const flag = `venn.recorded.${roomId}`;
     AsyncStorage.getItem(flag).then((done) => {
-      if (done) return;
+      if (done) return; // app relaunched onto an already-recorded final
       AsyncStorage.setItem(flag, '1').catch(() => {});
       const pairs: Record<string, string[]> = s.room.pairs || {};
       const others = s.players.filter((p) => !p.isMe);
@@ -83,12 +89,13 @@ export default function Final() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s?.room.phase, roomId, s?.meId]);
 
-  if (!roomId) return <Redirect href="/home" />;
+  const dead = s === null || s?.room.phase === 'closed';
+  useEffect(() => {
+    if (dead) clearRoom();
+  }, [dead, clearRoom]);
+
+  if (!roomId || dead) return <Redirect href="/home" />;
   if (s === undefined) return <View style={{ flex: 1, backgroundColor: t.bg }} />;
-  if (s === null || s.room.phase === 'closed') {
-    clearRoom();
-    return <Redirect href="/home" />;
-  }
   if (s.room.phase !== 'final') return <Redirect href="/game" />;
 
   const scores: Record<string, number> = s.room.scores || {};

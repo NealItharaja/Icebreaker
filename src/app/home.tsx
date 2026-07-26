@@ -88,9 +88,7 @@ export default function Home() {
   const [sheet, setSheet] = useState<null | 'set' | 'join' | 'behind'>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const people = floorPeople(world);
-  const met = people.filter((p) => p.met);
-  const unmet = people.filter((p) => !p.met);
+  const met = floorPeople(world);
   const played = world.gamesPlayed;
   const allOverlaps: string[] = [];
   met.forEach((p) =>
@@ -134,7 +132,7 @@ export default function Home() {
   const daypart = hour < 12 ? 'Morning' : hour < 18 ? 'Afternoon' : 'Evening';
   const weekday = new Date().toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
   const latestPlan = plans[plans.length - 1];
-  const noticeFaces = (unmet.length ? unmet.slice(0, 3) : met.slice(0, 3)).map((p) => p.sym);
+  const noticeFaces = met.length ? met.slice(0, 3).map((p) => p.sym) : [2, 5, 7];
 
   return (
     <View style={{ flex: 1, backgroundColor: t.bg }}>
@@ -294,18 +292,7 @@ export default function Home() {
                 </View>
               ))}
             </View>
-            <Btn
-              label="Put us in a game →"
-              variant="ghost"
-              size="sm"
-              onPress={() =>
-                router.push(
-                  unmet.length
-                    ? { pathname: '/create', params: { invite: unmet.slice(0, 3).map((u) => u.key).join(',') } }
-                    : '/create',
-                )
-              }
-            />
+            <Btn label="Open a room →" variant="ghost" size="sm" onPress={() => router.push('/create')} />
           </View>
         </View>
       </ScrollView>

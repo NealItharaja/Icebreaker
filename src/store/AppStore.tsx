@@ -1,5 +1,4 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { AI_SEEDS } from '../../convex/lib';
 import { DEFAULT_FLOOR } from '../game/data';
 import {
   loadPlans,
@@ -33,24 +32,11 @@ const EMPTY_WORLD: World = { gamesPlayed: 0, met: {} };
 
 const Ctx = createContext<AppStoreCtx | null>(null);
 
-/** old installs stored bot ids with no name/sym — upgrade them in place */
+/** drop malformed entries from older builds — the map holds real people only */
 function migrateWorld(w: World): World {
   const met: Record<string, MetPerson> = {};
   Object.entries(w.met || {}).forEach(([key, entry]: [string, any]) => {
-    if (entry?.name) {
-      met[key] = entry;
-      return;
-    }
-    const seed = AI_SEEDS.find((s) => s.key === key || `ai:${s.key}` === key);
-    if (seed) {
-      met[`ai:${seed.key}`] = {
-        name: seed.name,
-        sym: seed.sym,
-        isAi: true,
-        games: entry?.games ?? 1,
-        overlaps: entry?.overlaps ?? [],
-      };
-    }
+    if (entry?.name) met[key] = entry;
   });
   return { gamesPlayed: w.gamesPlayed || 0, met };
 }
@@ -152,9 +138,9 @@ export type FloorPerson = {
   overlaps: string[];
 };
 
-/** People on your map: everyone you've met, plus AI floor-mates you haven't. */
+/** People on your map: everyone you've actually played a room with. */
 export function floorPeople(world: World): FloorPerson[] {
-  const metEntries: FloorPerson[] = Object.entries(world.met).map(([key, m]) => ({
+  return Object.entries(world.met).map(([key, m]) => ({
     key,
     name: m.name,
     sym: m.sym,
@@ -163,14 +149,4 @@ export function floorPeople(world: World): FloorPerson[] {
     games: m.games,
     overlaps: m.overlaps,
   }));
-  const unmetAi: FloorPerson[] = AI_SEEDS.filter((s) => !world.met[`ai:${s.key}`]).map((s) => ({
-    key: `ai:${s.key}`,
-    name: s.name,
-    sym: s.sym,
-    isAi: true,
-    met: false,
-    games: 0,
-    overlaps: [],
-  }));
-  return [...metEntries, ...unmetAi];
 }

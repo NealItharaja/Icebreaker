@@ -28,17 +28,13 @@ export default function Lobby() {
   const pct = !s ? 10 : s.lobbyReady ? 100 : 40 + Math.min(40, s.players.length * 10);
   const bar = useGrow(pct, 0, 500);
 
-  if (!roomId) return <Redirect href="/home" />;
-  if (s === null) {
-    // room vanished (host closed it)
-    clearRoom();
-    return <Redirect href="/home" />;
-  }
-  if (s && s.room.phase !== 'lobby' && s.room.phase !== 'closed') return <Redirect href="/game" />;
-  if (s && s.room.phase === 'closed') {
-    clearRoom();
-    return <Redirect href="/home" />;
-  }
+  // room vanished or was closed by the host — state changes live in effects
+  const dead = s === null || s?.room.phase === 'closed';
+  React.useEffect(() => {
+    if (dead) clearRoom();
+  }, [dead, clearRoom]);
+  if (!roomId || dead) return <Redirect href="/home" />;
+  if (s && s.room.phase !== 'lobby') return <Redirect href="/game" />;
 
   const lines = [
     { mark: '01', text: `Room ${s?.room.code ?? '····'} is open. Real phones join with the code.`, on: true },
@@ -91,7 +87,7 @@ export default function Lobby() {
                   {p.isMe ? `${p.name} (you)` : p.name}
                 </Text>
                 <Text style={{ fontFamily: fonts.body, fontSize: 12, color: t.textMuted }}>
-                  {p.isMe ? 'this phone' : p.isAi ? 'AI floor-mate' : 'joined with the code'}
+                  {p.isMe ? 'this phone' : 'joined with the code'}
                 </Text>
               </View>
               <View style={{ paddingVertical: 4, paddingHorizontal: 10, borderRadius: 999, backgroundColor: t.accent2_100 }}>

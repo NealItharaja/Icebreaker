@@ -6,9 +6,6 @@ import { internal } from './_generated/api';
 import type { Id } from './_generated/dataModel';
 import * as gemma from './gemma';
 import {
-  AI_SEEDS,
-  aiGuess,
-  aiSelf,
   computeReveal,
   fallbackCommentary,
   fallbackPairs,
@@ -17,8 +14,8 @@ import {
   SpotLite,
 } from './lib';
 
-function logger(ctx: { runMutation: any }): gemma.LogFn {
-  return (entry) => ctx.runMutation(internal.game.logGemma, entry);
+function logger(ctx: { runMutation: any }, roomId?: Id<'rooms'>): gemma.LogFn {
+  return (entry) => ctx.runMutation(internal.game.logGemma, { ...entry, roomId });
 }
 
 const toLite = (p: any): PlayerLite => ({
@@ -50,7 +47,7 @@ export const writeRoundAction = internalAction({
       return byName;
     });
     const spec = await gemma.writeRound(
-      logger(ctx),
+      logger(ctx, args.roomId),
       args.r,
       snap.room.spice,
       Math.max(players.length, 2),
@@ -58,41 +55,6 @@ export const writeRoundAction = internalAction({
       priorAnswers,
     );
     await ctx.runMutation(internal.game.roundReady, { roomId: args.roomId, r: args.r, spec });
-
-    // AI seats answer in character as soon as the question exists
-    const ais = snap.players.filter((p: any) => p.isAi);
-    if (ais.length) {
-      const seeds = ais
-        .map((p: any) => AI_SEEDS.find((s) => `ai:${s.key}` === p.deviceId))
-        .filter(Boolean) as (typeof AI_SEEDS)[number][];
-      const moves = await gemma.aiMoves(logger(ctx), spec, args.r, seeds, snap.room.spice, players.length);
-      const litePlayers = snap.players.map(toLite);
-      const payload = ais.map((p: any) => {
-        const seed = AI_SEEDS.find((s) => `ai:${s.key}` === p.deviceId);
-        const m = seed ? moves[seed.key] : undefined;
-        const answer = m?.answer || spec.chips[(p.order * 3 + args.r) % spec.chips.length];
-        const pool = spec.chips.filter((c) => c.toLowerCase() !== answer.toLowerCase());
-        const decoys = m?.decoys?.length ? m.decoys : [pool[p.order % pool.length], pool[(p.order + 2) % pool.length]].filter(Boolean);
-        const planted = spec.archetype === 'tap' ? (m?.planted ?? pool[(p.order + 4) % pool.length] ?? null) : null;
-        const spot: SpotLite = {
-          sid: p._id,
-          name: p.name,
-          sym: p.sym,
-          truth: answer,
-          decoys,
-          planted,
-          selfMove: null,
-        };
-        return {
-          playerId: p._id as Id<'players'>,
-          answer,
-          decoys,
-          planted,
-          selfMove: aiSelf(args.r, spec.archetype, spot, litePlayers),
-        };
-      });
-      await ctx.runMutation(internal.game.saveAiMoves, { roomId: args.roomId, r: args.r, moves: payload });
-    }
   },
 });
 
@@ -102,7 +64,7 @@ export const draftLiesAction = internalAction({
     const snap = await ctx.runMutation(internal.game.gather, { roomId: args.roomId, r: args.r });
     if (!snap.room || !snap.round?.spec) return;
     const lies = await gemma.draftLies(
-      logger(ctx),
+      logger(ctx, args.roomId),
       snap.round.spec,
       args.answer,
       snap.room.spice,
@@ -134,20 +96,13 @@ export const revealAction = internalAction({
       };
     });
 
-    const answers: Record<string, string> = {};
-    spots.forEach((s) => (answers[s.sid] = s.truth));
-
-    // everyone's guesses: humans from their moves, AI deterministic
+    // everyone's guesses, straight from their moves
     const guesses: Record<string, string | undefined> = {};
     players.forEach((g) => {
       spots.forEach((sp) => {
         if (g.id === sp.sid) return;
-        if (g.isAi) {
-          guesses[`${g.id}|${sp.sid}`] = aiGuess(args.r, spec.archetype, sp, g, players, answers);
-        } else {
-          const m = snap.moves.find((mm: any) => mm.playerId === g.id);
-          guesses[`${g.id}|${sp.sid}`] = m?.guesses?.[sp.sid];
-        }
+        const m = snap.moves.find((mm: any) => mm.playerId === g.id);
+        guesses[`${g.id}|${sp.sid}`] = m?.guesses?.[sp.sid];
       });
     });
 
@@ -163,7 +118,7 @@ export const revealAction = internalAction({
           pairsList.push({ truth: sp.truth, guess: guesses[`${g.id}|${sp.sid}`] || null });
         }),
       );
-      const results = await gemma.judgeBatch(logger(ctx), spec.q, pairsList, snap.room.spice, players.length);
+      const results = await gemma.judgeBatch(logger(ctx, args.roomId), spec.q, pairsList, snap.room.spice, players.length);
       const map: Record<string, (typeof results)[number]> = {};
       keys.forEach((k, i) => (map[k] = results[i]));
       judgeFn = (guess: string | undefined, truth: string, gid: string, sid: string) =>
@@ -176,7 +131,7 @@ export const revealAction = internalAction({
     );
 
     const { lines, mid } = await gemma.revealLines(
-      logger(ctx),
+      logger(ctx, args.roomId),
       cards,
       snap.room.spice,
       players.length,
@@ -201,7 +156,7 @@ export const revealAction = internalAction({
       .sort((a: any, b: any) => a.r - b.r)
       .map((rr: any) => ({ q: rr.spec.q }));
     const pairs = await gemma.clusterPairs(
-      logger(ctx),
+      logger(ctx, args.roomId),
       players.map((p) => ({ id: p.id, name: p.name })),
       qs,
       answersByRound,
@@ -245,7 +200,7 @@ export const shareAction = action({
       });
     const all = Array.from(new Set(Object.values(pairs).flat()));
     const card = await gemma.shareCard(
-      logger(ctx),
+      logger(ctx, args.roomId),
       me.name,
       best,
       all,

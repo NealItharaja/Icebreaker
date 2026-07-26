@@ -103,7 +103,7 @@ export function StandView({ s }: { s: any }) {
         label={s.room.r < 2 ? `Round ${s.room.r + 2} →` : 'See the results'}
         size="lg"
         onPress={() => {
-          if (roomId && deviceId) advance({ roomId, deviceId }).catch(() => {});
+          if (roomId && deviceId) advance({ roomId, deviceId, from: 'stand' }).catch(() => {});
         }}
       />
     </ScrollView>

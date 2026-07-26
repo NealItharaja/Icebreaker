@@ -1,13 +1,11 @@
-// "Open a room" — friends join with the numeric code; AI floor-mates can
-// fill empty seats so the game works even when the hallway is quiet.
+// "Open a room" — real friends join with the four digits. That's it.
 
 import { useMutation } from 'convex/react';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { api } from '../../convex/_generated/api';
-import { AI_SEEDS } from '../../convex/lib';
 import { Avatar, GemmaMark } from '../components/Avatar';
 import { pop } from '../components/motion';
 import { Btn, Heading, Kicker, RoundBtn } from '../components/ui';
@@ -23,46 +21,8 @@ export default function Create() {
   const { deviceId, enterRoom } = useRoomSession();
   const createRoom = useMutation(api.game.createRoom);
   const router = useRouter();
-  const { invite } = useLocalSearchParams<{ invite?: string }>();
-  const invites = React.useMemo(
-    () =>
-      (typeof invite === 'string' && invite ? invite.split(',') : [])
-        .map((k) => k.replace(/^ai:/, ''))
-        .filter((k) => AI_SEEDS.some((s) => s.key === k)),
-    [invite],
-  );
-  const [aiCount, setAiCount] = useState(() => Math.max(2, Math.min(6, invites.length)));
   const [spice, setSpice] = useState<Spice>('chaotic');
   const [opening, setOpening] = useState(false);
-
-  const aiPool = [
-    ...AI_SEEDS.filter((s) => invites.includes(s.key)),
-    ...AI_SEEDS.filter((s) => !invites.includes(s.key)),
-  ];
-  const roster = [
-    { key: 'me', name: 'you', sym: profile.sym },
-    ...aiPool.slice(0, aiCount).map((s) => ({ key: s.key, name: s.name, sym: s.sym })),
-  ];
-
-  const stepBtn = (label: string, onPress: () => void, disabled: boolean) => (
-    <Pressable
-      onPress={onPress}
-      disabled={disabled}
-      style={({ pressed }) => ({
-        width: 52,
-        height: 52,
-        borderRadius: 26,
-        borderWidth: 1.5,
-        borderColor: t.divider,
-        alignItems: 'center',
-        justifyContent: 'center',
-        opacity: disabled ? 0.35 : 1,
-        backgroundColor: pressed ? 'rgba(127,127,127,0.1)' : 'transparent',
-      })}
-    >
-      <Text style={{ fontFamily: fonts.body, fontSize: 26, color: t.text, lineHeight: 30 }}>{label}</Text>
-    </Pressable>
-  );
 
   const open = async () => {
     if (!deviceId || opening) return;
@@ -73,8 +33,6 @@ export default function Create() {
         name: profile.name || 'You',
         sym: profile.sym,
         spice,
-        aiCount,
-        aiKeys: invites.length ? invites : undefined,
       });
       enterRoom(res.roomId);
       router.push('/lobby');
@@ -90,47 +48,35 @@ export default function Create() {
           <RoundBtn icon="chevronLeft" onPress={() => (router.canGoBack() ? router.back() : router.replace('/home'))} />
         </View>
         <Heading size={33}>Open a room</Heading>
-        <Text style={{ fontFamily: fonts.body, fontSize: 14, color: t.textMuted, marginTop: 6, marginBottom: 20 }}>
-          Friends join with the code — real phones, real people. Nobody fills anything in first.
+        <Text style={{ fontFamily: fonts.body, fontSize: 14, color: t.textMuted, marginTop: 6, marginBottom: 24 }}>
+          You get four digits. Read them across the hallway — everyone joins from their own phone. Nobody fills anything in first.
         </Text>
-        <Text style={{ fontFamily: fonts.body, fontSize: 12, color: t.textMuted, marginBottom: 10 }}>
-          AI floor-mates to fill empty seats
-        </Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 18, marginBottom: 8 }}>
-          {stepBtn('−', () => setAiCount((v) => Math.max(0, v - 1)), aiCount <= 0)}
-          <Text style={{ fontFamily: fonts.heading, fontSize: 56, lineHeight: 60, color: t.text, width: 78, textAlign: 'center' }}>
-            {aiCount}
-          </Text>
-          {stepBtn('+', () => setAiCount((v) => Math.min(6, v + 1)), aiCount >= 6)}
-        </View>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14, marginBottom: 26, minHeight: 56 }}>
-          {roster.map((p) => (
-            <Animated.View key={p.key} entering={pop()} style={{ width: 52, alignItems: 'center', gap: 5 }}>
-              <View style={{ width: 46, height: 46, borderRadius: 23, overflow: 'hidden' }}>
-                <Avatar sym={p.sym} size={46} />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 26 }}>
+          <Animated.View entering={pop()} style={{ alignItems: 'center', gap: 5, width: 56 }}>
+            <View style={{ width: 50, height: 50, borderRadius: 25, overflow: 'hidden' }}>
+              <Avatar sym={profile.sym} size={50} />
+            </View>
+            <Text style={{ fontFamily: fonts.body, fontSize: 10.5, color: t.textMuted }}>you</Text>
+          </Animated.View>
+          {[0, 1, 2].map((i) => (
+            <Animated.View key={i} entering={pop(120 + i * 90)} style={{ alignItems: 'center', gap: 5, width: 56 }}>
+              <View
+                style={{
+                  width: 50,
+                  height: 50,
+                  borderRadius: 25,
+                  borderWidth: 1.5,
+                  borderStyle: 'dashed',
+                  borderColor: t.divider,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Text style={{ fontFamily: fonts.body, fontSize: 20, color: t.textMuted }}>+</Text>
               </View>
-              <Text style={{ fontFamily: fonts.body, fontSize: 10.5, color: t.textMuted, textAlign: 'center' }} numberOfLines={1}>
-                {p.name}
-              </Text>
+              <Text style={{ fontFamily: fonts.body, fontSize: 10.5, color: t.textMuted }}>{i === 2 ? '· · ·' : 'friend'}</Text>
             </Animated.View>
           ))}
-          <Animated.View entering={pop(120)} style={{ width: 52, alignItems: 'center', gap: 5 }}>
-            <View
-              style={{
-                width: 46,
-                height: 46,
-                borderRadius: 23,
-                borderWidth: 1.5,
-                borderStyle: 'dashed',
-                borderColor: t.divider,
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <Text style={{ fontFamily: fonts.body, fontSize: 20, color: t.textMuted }}>+</Text>
-            </View>
-            <Text style={{ fontFamily: fonts.body, fontSize: 10.5, color: t.textMuted, textAlign: 'center' }}>friends</Text>
-          </Animated.View>
         </View>
         <Text style={{ fontFamily: fonts.body, fontSize: 12, color: t.textMuted, marginBottom: 10 }}>How mean should gemma be?</Text>
         <View style={{ flexDirection: 'row', gap: 8, marginBottom: 26 }}>

@@ -1,5 +1,5 @@
-// The floor map — real people you've played with, and the AI floor-mates
-// you haven't. Thicker line, more in common. It survives the night.
+// The floor map — the real people you've played rooms with.
+// Thicker line, more in common. It survives the night.
 
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
@@ -20,9 +20,10 @@ export default function Map() {
   const [node, setNode] = useState<FloorPerson | null>(null);
 
   const people = floorPeople(world).slice(0, 10);
-  const unmetAi = people.filter((p) => !p.met && p.isAi);
   const played = world.gamesPlayed > 0;
   const R = 92;
+  // an empty map still deserves a shape — ghost seats until you play
+  const ghostCount = people.length ? 0 : 5;
 
   return (
     <View style={{ flex: 1, backgroundColor: t.bg }}>
@@ -37,6 +38,17 @@ export default function Map() {
             : 'Nothing here yet. Play one room and the lines appear.'}
         </Text>
         <Svg width="100%" height={300} viewBox="0 0 260 240">
+          {Array.from({ length: ghostCount }, (_, i) => {
+            const a = -Math.PI / 2 + (i / ghostCount) * Math.PI * 2;
+            const x = 130 + Math.cos(a) * R;
+            const y = 120 + Math.sin(a) * R;
+            return (
+              <React.Fragment key={`g${i}`}>
+                <Line x1={130} y1={120} x2={x} y2={y} stroke={t.neutral400} strokeWidth={1.5} strokeDasharray="3 6" strokeOpacity={0.5} />
+                <Circle cx={x} cy={y} r={8} fill={t.neutral500} fillOpacity={0.3} />
+              </React.Fragment>
+            );
+          })}
           {people.map((p, i) => {
             const a = -Math.PI / 2 + (i / Math.max(1, people.length)) * Math.PI * 2;
             const x = 130 + Math.cos(a) * R;
@@ -101,11 +113,7 @@ export default function Map() {
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={{ fontFamily: fonts.bodySemi, fontSize: 15, color: t.text }}>{p.name}</Text>
                 <Text style={{ fontFamily: fonts.body, fontSize: 12, color: t.textMuted }} numberOfLines={1}>
-                  {p.met
-                    ? p.overlaps.slice(0, 2).join(' · ') || 'played a room · no overlap yet'
-                    : p.isAi
-                      ? 'AI floor-mate · never met'
-                      : 'never met'}
+                  {p.overlaps.slice(0, 2).join(' · ') || 'played a room · no overlap yet'}
                 </Text>
               </View>
               <View
@@ -125,12 +133,10 @@ export default function Map() {
         </View>
         <View style={{ borderRadius: 26, backgroundColor: t.accent2_100, padding: 17, marginVertical: 14 }}>
           <Text style={{ fontFamily: fonts.heading, fontSize: 19, color: t.accent2_800, marginBottom: 6 }}>
-            {unmetAi.length
-              ? 'Fill a room and watch this grow'
-              : 'Run it back — the map sharpens every game'}
+            {people.length ? 'Run it back — the map sharpens every game' : 'Your map starts with one room'}
           </Text>
           <Text style={{ fontFamily: fonts.body, fontSize: 13.5, lineHeight: 20, color: t.accent2_800, opacity: 0.85 }}>
-            Open a room and read the four digits across the hallway. Real phones join in seconds; AI floor-mates fill whatever stays empty.
+            Open a room and read the four digits across the hallway. Everyone who joins ends up on this map, with what you share.
           </Text>
           <Btn
             label="Open a room"

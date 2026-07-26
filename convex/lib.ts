@@ -61,29 +61,6 @@ export type NeutralCard = {
   allMiss: boolean;
 };
 
-// ── AI seat-filler personas ───────────────────────────────────────────────
-
-export type AiSeed = {
-  key: string;
-  name: string;
-  sym: number;
-  from: string;
-  hobby: string;
-  vibe: string;
-  food: string;
-  snack: string;
-  take: string;
-};
-
-export const AI_SEEDS: AiSeed[] = [
-  { key: 'maya', name: 'Maya', sym: 2, from: 'Tucson, AZ', hobby: 'thrifting', vibe: 'chronically early, aggressively friendly', food: 'breakfast burrito', snack: 'cold brew', take: 'pineapple belongs on everything, not just pizza' },
-  { key: 'theo', name: 'Theo', sym: 3, from: 'Portland, ME', hobby: 'bass guitar', vibe: 'quiet until music comes up', food: 'pad thai', snack: 'iced coffee', take: '8am classes should be illegal' },
-  { key: 'jalen', name: 'Jalen', sym: 4, from: 'Atlanta, GA', hobby: 'pickup basketball', vibe: 'knows everyone on the floor already', food: 'wings', snack: 'hot cheetos', take: 'the dining hall pasta is underrated' },
-  { key: 'chloe', name: 'Chloe', sym: 5, from: 'Minneapolis, MN', hobby: 'film photography', vibe: 'dry humor, secretly sentimental', food: 'tater tot hotdish', snack: 'bubble tea', take: 'group projects are a scam' },
-  { key: 'sam', name: 'Sam', sym: 6, from: 'San Diego, CA', hobby: 'skating', vibe: 'will befriend you at 7am whether you like it or not', food: 'carne asada fries', snack: 'churro', take: 'sunrise beats sunset, no debate' },
-  { key: 'ava', name: 'Ava', sym: 7, from: 'Columbus, OH', hobby: 'chess', vibe: 'wins arguments on purpose, games by accident', food: 'chicken tenders', snack: 'ramen at 2am', take: 'cereal is a soup' },
-];
-
 // ── fallback round shells (offline / model failure) ───────────────────────
 
 export const FALLBACK_ROUNDS: RoundSpec[] = [
@@ -142,54 +119,6 @@ export function randomCode(rand: () => number = Math.random): string {
   let out = '';
   for (let i = 0; i < 4; i++) out += Math.floor(rand() * 10);
   return out;
-}
-
-// ── deterministic AI guessing (same spread as the design) ─────────────────
-
-export function h(r: number, sidIdx: number, bidIdx: number): number {
-  return (r * 3 + (sidIdx + 1) * 5 + (bidIdx + 1) * 2) % 7;
-}
-
-export function aiGuess(
-  r: number,
-  archetype: string,
-  spot: SpotLite,
-  ai: PlayerLite,
-  players: PlayerLite[],
-  answers: Record<string, string>,
-): string {
-  const sidIdx = players.findIndex((p) => p.id === spot.sid);
-  const bidIdx = players.findIndex((p) => p.id === ai.id);
-  const hh = h(r, sidIdx, bidIdx);
-  const right = hh <= 3;
-  if (archetype === 'tap') {
-    if (right) return spot.truth;
-    if (hh === 4 && spot.planted) return spot.planted;
-    const pool = spot.decoys.length ? spot.decoys : [spot.truth];
-    return pool[(hh - 5 + pool.length * 2) % pool.length];
-  }
-  if (archetype === 'type') {
-    if (right) return spot.truth;
-    const others = players
-      .filter((p) => p.id !== spot.sid)
-      .map((p) => answers[p.id])
-      .filter(Boolean);
-    if (!others.length) return spot.truth;
-    return others[hh % others.length];
-  }
-  if (right) return spot.sid;
-  const pool = players.filter((p) => p.id !== ai.id && p.id !== spot.sid);
-  return pool.length ? pool[hh % pool.length].id : spot.sid;
-}
-
-export function aiSelf(r: number, archetype: string, spot: SpotLite, players: PlayerLite[]): string | null {
-  const sidIdx = players.findIndex((p) => p.id === spot.sid);
-  if (archetype === 'type') return String((sidIdx + 1) % players.length);
-  if (archetype === 'whose') {
-    const pool = players.filter((p) => p.id !== spot.sid);
-    return pool.length ? pool[(sidIdx + 1) % pool.length].id : null;
-  }
-  return spot.planted;
 }
 
 // ── fallback judge (token overlap) ────────────────────────────────────────
@@ -273,7 +202,8 @@ export function computeReveal(
         if (j.ok || j.half) pts.push({ pid: g.id, text: `${g.name} ${row.tag}` });
       } else if (archetype === 'tap') {
         const ok = val === sp.truth;
-        const isTrap = !!sp.planted && val === sp.planted;
+        // a lie identical to the truth can never double-score
+        const isTrap = !!sp.planted && val === sp.planted && val !== sp.truth;
         row.ok = ok;
         row.isTrap = isTrap;
         row.tag = ok ? '+100' : isTrap ? 'trapped' : 'miss';
