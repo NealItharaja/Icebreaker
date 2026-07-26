@@ -1,5 +1,5 @@
-// The floor map — the app's real job. Thicker line, more in common.
-// It grows every game you play, and survives the night.
+// The floor map — real people you've played with, and the AI floor-mates
+// you haven't. Thicker line, more in common. It survives the night.
 
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
@@ -7,9 +7,9 @@ import { Pressable, ScrollView, Text, View } from 'react-native';
 import Svg, { Circle, Line, Text as SvgText } from 'react-native-svg';
 import { Avatar } from '../components/Avatar';
 import { TabBar } from '../components/TabBar';
-import { NodeInfo, NodeSheet } from '../components/sheets/NodeSheet';
+import { NodeSheet } from '../components/sheets/NodeSheet';
 import { Btn, Heading, Kicker } from '../components/ui';
-import { floorPeople, useAppStore } from '../store/AppStore';
+import { FloorPerson, floorPeople, useAppStore } from '../store/AppStore';
 import { useTheme } from '../theme/ThemeContext';
 import { fonts } from '../theme/tokens';
 
@@ -17,10 +17,10 @@ export default function Map() {
   const { t } = useTheme();
   const { profile, world } = useAppStore();
   const router = useRouter();
-  const [node, setNode] = useState<NodeInfo | null>(null);
+  const [node, setNode] = useState<FloorPerson | null>(null);
 
-  const people = floorPeople(world);
-  const unmet = people.filter((p) => !p.met);
+  const people = floorPeople(world).slice(0, 10);
+  const unmetAi = people.filter((p) => !p.met && p.isAi);
   const played = world.gamesPlayed > 0;
   const R = 92;
 
@@ -33,18 +33,18 @@ export default function Map() {
         </Heading>
         <Text style={{ fontFamily: fonts.body, fontSize: 13.5, color: t.textMuted, marginBottom: 8 }}>
           {played
-            ? 'Thicker line, more in common. It grows every game you play.'
-            : 'Nothing here yet. Play one game and the lines appear.'}
+            ? 'Thicker line, more in common. It grows every room you play.'
+            : 'Nothing here yet. Play one room and the lines appear.'}
         </Text>
         <Svg width="100%" height={300} viewBox="0 0 260 240">
           {people.map((p, i) => {
-            const a = -Math.PI / 2 + (i / people.length) * Math.PI * 2;
+            const a = -Math.PI / 2 + (i / Math.max(1, people.length)) * Math.PI * 2;
             const x = 130 + Math.cos(a) * R;
             const y = 120 + Math.sin(a) * R;
             const shN = p.met ? p.overlaps.length : 0;
             return (
               <Line
-                key={p.bot.id}
+                key={p.key}
                 x1={130}
                 y1={120}
                 x2={x}
@@ -58,13 +58,13 @@ export default function Map() {
             );
           })}
           {people.map((p, i) => {
-            const a = -Math.PI / 2 + (i / people.length) * Math.PI * 2;
+            const a = -Math.PI / 2 + (i / Math.max(1, people.length)) * Math.PI * 2;
             const x = 130 + Math.cos(a) * R;
             const y = 120 + Math.sin(a) * R;
             const shN = p.met ? p.overlaps.length : 0;
             return (
               <Circle
-                key={p.bot.id}
+                key={p.key}
                 cx={x}
                 cy={y}
                 r={p.met ? 11 + shN * 2.2 : 8}
@@ -81,7 +81,7 @@ export default function Map() {
         <View style={{ gap: 9, marginTop: 12 }}>
           {people.map((p) => (
             <Pressable
-              key={p.bot.id}
+              key={p.key}
               onPress={() => setNode(p)}
               style={({ pressed }) => ({
                 flexDirection: 'row',
@@ -96,14 +96,16 @@ export default function Map() {
               })}
             >
               <View style={{ width: 40, height: 40, borderRadius: 20, overflow: 'hidden', opacity: p.met ? 1 : 0.45 }}>
-                <Avatar sym={p.bot.sym} size={40} />
+                <Avatar sym={p.sym} size={40} />
               </View>
               <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={{ fontFamily: fonts.bodySemi, fontSize: 15, color: t.text }}>{p.bot.name}</Text>
+                <Text style={{ fontFamily: fonts.bodySemi, fontSize: 15, color: t.text }}>{p.name}</Text>
                 <Text style={{ fontFamily: fonts.body, fontSize: 12, color: t.textMuted }} numberOfLines={1}>
                   {p.met
-                    ? p.overlaps.slice(0, 2).join(' · ') || 'played a game · no overlap yet'
-                    : `${p.bot.from} · never met`}
+                    ? p.overlaps.slice(0, 2).join(' · ') || 'played a room · no overlap yet'
+                    : p.isAi
+                      ? 'AI floor-mate · never met'
+                      : 'never met'}
                 </Text>
               </View>
               <View
@@ -123,25 +125,17 @@ export default function Map() {
         </View>
         <View style={{ borderRadius: 26, backgroundColor: t.accent2_100, padding: 17, marginVertical: 14 }}>
           <Text style={{ fontFamily: fonts.heading, fontSize: 19, color: t.accent2_800, marginBottom: 6 }}>
-            {unmet.length
-              ? `${unmet.length} ${unmet.length === 1 ? 'person' : 'people'} you have not played with`
-              : 'You have played with the whole floor'}
+            {unmetAi.length
+              ? 'Fill a room and watch this grow'
+              : 'Run it back — the map sharpens every game'}
           </Text>
           <Text style={{ fontFamily: fonts.body, fontSize: 13.5, lineHeight: 20, color: t.accent2_800, opacity: 0.85 }}>
-            {unmet.length
-              ? 'Venn can put you in a game with them in about six minutes. Nobody has to fill in a profile first.'
-              : 'Run it back — the overlaps get sharper every game, and so do the take reveals.'}
+            Open a room and read the four digits across the hallway. Real phones join in seconds; AI floor-mates fill whatever stays empty.
           </Text>
           <Btn
-            label={unmet.length ? 'Start a game with them' : 'Play again'}
+            label="Open a room"
             size="sm"
-            onPress={() =>
-              router.push(
-                unmet.length
-                  ? { pathname: '/create', params: { invite: unmet.map((u) => u.bot.id).join(',') } }
-                  : '/create',
-              )
-            }
+            onPress={() => router.push('/create')}
             style={{ marginTop: 14, alignSelf: 'flex-start', paddingHorizontal: 18 }}
           />
         </View>

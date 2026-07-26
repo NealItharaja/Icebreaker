@@ -1,82 +1,38 @@
-// Guess phase: one card per friend. Your own spotlight is a spectator card —
-// you watch them lock in guesses about you.
+// Guess phase against the live room: one card per sealed friend; your own
+// spotlight is a spectator card while real phones lock in about you.
 
+import { useMutation } from 'convex/react';
 import React, { useState } from 'react';
-import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { ScrollView, Text, TextInput, View } from 'react-native';
 import Animated from 'react-native-reanimated';
+import { api } from '../../../convex/_generated/api';
+import { guessMs } from '../../../convex/lib';
 import { Avatar } from '../Avatar';
 import { rise } from '../motion';
 import { Btn, Icon, StreamedText } from '../ui';
-import { GameController, GState } from '../../game/GameContext';
-import { Spot } from '../../game/types';
+import { useCountdown, useRoomSession } from '../../game/room';
 import { useTheme } from '../../theme/ThemeContext';
 import { fonts } from '../../theme/tokens';
+import { OptionRow } from './AskView';
 import { PresenceRow, RoundHeader, WaitCenter } from './chrome';
 
-function sortOptions(opts: string[], sid: string): string[] {
-  return opts.slice().sort((a, b) => (a + sid).length - (b + sid).length || a.localeCompare(b));
-}
-
-function dedupe(opts: string[]): string[] {
-  const out: string[] = [];
-  for (const o of opts) if (!out.some((x) => x.toLowerCase() === o.toLowerCase())) out.push(o);
-  return out;
-}
-
-function OptionRow({
-  label,
-  selected,
-  onPress,
-  sym,
-}: {
-  label: string;
-  selected: boolean;
-  onPress: () => void;
-  sym?: number;
-}) {
+function Spectate({ s, onDone }: { s: any; onDone: () => void }) {
   const { t } = useTheme();
-  return (
-    <Pressable
-      onPress={onPress}
-      style={{
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-        paddingVertical: 14,
-        paddingHorizontal: 16,
-        borderRadius: 22,
-        borderWidth: 1.5,
-        borderColor: selected ? t.accent : t.divider,
-        backgroundColor: selected ? t.accent : 'transparent',
-      }}
-    >
-      {sym != null && (
-        <View style={{ width: 32, height: 32, borderRadius: 16, overflow: 'hidden' }}>
-          <Avatar sym={sym} size={32} />
-        </View>
-      )}
-      <Text style={{ flex: 1, fontFamily: fonts.body, fontSize: 15.5, color: selected ? t.bg : t.text }}>{label}</Text>
-      {selected && <Icon name="check" size={17} color={t.bg} strokeWidth={3} />}
-    </Pressable>
-  );
-}
-
-function Spectate({ g, ctrl }: { g: GState; ctrl: GameController }) {
-  const { t } = useTheme();
-  const round = g.round!;
-  const me = g.players.find((p) => p.id === 'me')!;
-  const mySpot = (g.spots || []).find((s) => s.sid === 'me');
-  const bots = g.players.filter((p) => p.id !== 'me');
-  const truth = mySpot?.truth ?? g.myAnswers[g.r] ?? '—';
-  const mySelf = g.mySelf[g.r];
+  const round = s.round;
+  const me = s.players.find((p: any) => p.isMe);
+  const others = s.players.filter((p: any) => !p.isMe);
+  const truth = s.myMove?.answer ?? '—';
+  const selfMove = s.myMove?.selfMove;
   const heading =
-    round.archetype === 'whose' ? 'Your take is in the pile, unsigned.' : round.aboutTemplate.replace('{name}', me.name);
+    round.archetype === 'whose'
+      ? 'Your take is in the pile, unsigned.'
+      : round.aboutTemplate.replace('{name}', me?.name || 'you');
   const extra =
     round.archetype === 'tap'
-      ? `You planted “${mySelf || '—'}” in their options.`
+      ? `You planted “${s.myMove?.planted || '—'}” in their options.`
       : round.archetype === 'type'
-        ? `You called ${mySelf || '—'} of them getting it.`
-        : `You bet they will blame ${g.players.find((p) => p.id === mySelf)?.name || '—'}.`;
+        ? `You called ${selfMove ?? '—'} of them getting it.`
+        : `You bet they will blame ${s.players.find((p: any) => p.id === selfMove)?.name || '—'}.`;
 
   return (
     <Animated.View entering={rise()} style={{ flex: 1, minHeight: 0 }}>
@@ -108,8 +64,8 @@ function Spectate({ g, ctrl }: { g: GState; ctrl: GameController }) {
         </View>
       </View>
       <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-        {bots.map((p) => {
-          const done = !!g.botLocked[p.id];
+        {others.map((p: any) => {
+          const done = !!s.locked[p.id];
           return (
             <View
               key={p.id}
@@ -140,18 +96,32 @@ function Spectate({ g, ctrl }: { g: GState; ctrl: GameController }) {
           );
         })}
       </ScrollView>
-      <Btn label="Now let me guess theirs →" onPress={() => ctrl.leaveSpectate()} style={{ marginTop: 12 }} />
+      <Btn label="Now let me guess theirs →" onPress={onDone} style={{ marginTop: 12 }} />
     </Animated.View>
   );
 }
 
-function GuessCard({ g, ctrl, spot }: { g: GState; ctrl: GameController; spot: Spot }) {
+function GuessCard({ s, spot }: { s: any; spot: any }) {
   const { t, sh } = useTheme();
+  const { roomId, deviceId } = useRoomSession();
+  const submitGuess = useMutation(api.game.submitGuess);
   const [draft, setDraft] = useState('');
-  const round = g.round!;
-  const chosen = g.picks[`${g.r}|${spot.sid}`];
+  const [busy, setBusy] = useState(false);
+  const round = s.round;
+  const chosen = s.myMove?.guesses?.[spot.sid];
   const kicker = round.archetype === 'whose' ? 'an anonymous take' : `about ${spot.name}`;
   const q = round.archetype === 'whose' ? 'Whose take is this?' : round.aboutTemplate.replace('{name}', spot.name);
+
+  const guess = async (value: string) => {
+    if (!roomId || !deviceId || busy || !value.trim()) return;
+    setBusy(true);
+    try {
+      await submitGuess({ roomId, deviceId, sid: spot.sid, value: value.trim() });
+      setDraft('');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <Animated.View key={spot.sid} entering={rise()} style={{ flex: 1, minHeight: 0 }}>
@@ -173,7 +143,7 @@ function GuessCard({ g, ctrl, spot }: { g: GState; ctrl: GameController; spot: S
       <Text style={{ fontFamily: fonts.body, fontSize: 13, color: t.textMuted, marginBottom: 18 }}>{round.aboutHint}</Text>
       {round.archetype === 'whose' && (
         <View style={{ borderRadius: 24, backgroundColor: t.surface, paddingVertical: 18, paddingHorizontal: 20, marginBottom: 18 }}>
-          <Text style={{ fontFamily: fonts.heading, fontSize: 20, lineHeight: 26, color: t.text }}>“{spot.truth}”</Text>
+          <Text style={{ fontFamily: fonts.heading, fontSize: 20, lineHeight: 26, color: t.text }}>“{spot.quote}”</Text>
         </View>
       )}
       {round.archetype === 'type' ? (
@@ -184,9 +154,7 @@ function GuessCard({ g, ctrl, spot }: { g: GState; ctrl: GameController; spot: S
             placeholder="anything, in your words"
             placeholderTextColor={t.textFaint}
             returnKeyType="done"
-            onSubmitEditing={() => {
-              if (draft.trim()) ctrl.guess(spot.sid, draft.trim());
-            }}
+            onSubmitEditing={() => guess(draft)}
             style={{
               fontFamily: fonts.body,
               fontSize: 17,
@@ -202,19 +170,18 @@ function GuessCard({ g, ctrl, spot }: { g: GState; ctrl: GameController; spot: S
             }}
           />
           <View style={{ flex: 1 }} />
-          <Btn label="Lock it in" disabled={!draft.trim()} onPress={() => ctrl.guess(spot.sid, draft.trim())} />
+          <Btn label="Lock it in" disabled={!draft.trim() || busy} onPress={() => guess(draft)} />
         </>
       ) : (
         <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 9 }}>
           {round.archetype === 'whose'
-            ? // it can't be yours — you spectated your own take — so everyone else is a suspect
-              g.players
-                .filter((p) => p.id !== 'me')
-                .map((p) => (
-                  <OptionRow key={p.id} label={p.name} sym={p.sym} selected={chosen === p.id} onPress={() => ctrl.guess(spot.sid, p.id)} />
+            ? s.players
+                .filter((p: any) => !p.isMe)
+                .map((p: any) => (
+                  <OptionRow key={p.id} label={p.name} sym={p.sym} selected={chosen === p.id} onPress={() => guess(p.id)} disabled={busy} />
                 ))
-            : dedupe(sortOptions([spot.truth, ...spot.decoys, ...(spot.planted ? [spot.planted] : [])], spot.sid)).map((o) => (
-                <OptionRow key={o} label={o} selected={chosen === o} onPress={() => ctrl.guess(spot.sid, o)} />
+            : (spot.options || []).map((o: string) => (
+                <OptionRow key={o} label={o} selected={chosen === o} onPress={() => guess(o)} disabled={busy} />
               ))}
         </ScrollView>
       )}
@@ -222,52 +189,56 @@ function GuessCard({ g, ctrl, spot }: { g: GState; ctrl: GameController; spot: S
   );
 }
 
-export function GuessView({ g, ctrl }: { g: GState; ctrl: GameController }) {
+export function GuessView({ s }: { s: any }) {
   const { t } = useTheme();
-  const tasks = ctrl.tasks();
-  const cur = tasks[g.task];
-  const bots = g.players.filter((p) => p.id !== 'me');
-  const pendingNames = bots.filter((p) => !g.botLocked[p.id]).map((p) => p.name);
-  const lockedCount = g.players.filter((p) => (p.id === 'me' ? g.task >= tasks.length : g.botLocked[p.id])).length;
-  const tag = g.round ? { tap: 'TAP', type: 'TYPE', whose: 'WHOSE' }[g.round.archetype] : '';
+  const [spectateDone, setSpectateDone] = useState(false);
+  const { tleft, pct } = useCountdown(s.room.deadline, guessMs(s.players.length));
+  const meId = s.meId;
+  const humans = s.players.filter((p: any) => !p.isAi);
+  const iSealed = !!s.myMove?.sealed;
+  const targets = s.spots.filter((sp: any) => sp.sid !== meId);
+  const guessedCount = targets.filter((sp: any) => s.myMove?.guesses?.[sp.sid]).length;
+  const showSpectate = iSealed && !spectateDone;
+  const current = showSpectate ? null : targets.find((sp: any) => !s.myMove?.guesses?.[sp.sid]);
+  const allDone = !showSpectate && !current;
+  const pendingNames = humans.filter((p: any) => !p.isMe && !s.locked[p.id]).map((p: any) => p.name);
+  const lockedCount = s.players.filter((p: any) => (p.isMe ? allDone : s.locked[p.id])).length;
+  const tag = s.round ? { tap: 'TAP', type: 'TYPE', whose: 'WHOSE' }[s.round.archetype as 'tap'] || '' : '';
+  const pips = (iSealed ? 1 : 0) + targets.length;
+  const pipsDone = (iSealed && spectateDone ? 1 : 0) + guessedCount;
 
   return (
     <View style={{ flex: 1, paddingTop: 56, paddingHorizontal: 20, paddingBottom: 18 }}>
-      <RoundHeader g={g} tag={tag} tagTone="accent2" />
-      {cur && (
+      <RoundHeader r={s.room.r} tag={tag} tagTone="accent2" tleft={tleft} pct={pct} showTimer={s.room.deadline != null} />
+      {!allDone && pips > 0 && (
         <View style={{ flexDirection: 'row', gap: 5, marginBottom: 16 }}>
-          {tasks.map((_, i) => (
+          {Array.from({ length: pips }, (_, i) => (
             <View
               key={i}
               style={{
                 height: 4,
                 flex: 1,
                 borderRadius: 3,
-                backgroundColor: i < g.task ? t.accent : i === g.task ? t.accent300 : t.divider,
+                backgroundColor: i < pipsDone ? t.accent : i === pipsDone ? t.accent300 : t.divider,
               }}
             />
           ))}
         </View>
       )}
-      {cur ? (
-        cur.kind === 'spectate' ? (
-          <Spectate g={g} ctrl={ctrl} />
-        ) : (
-          <GuessCard key={cur.sid} g={g} ctrl={ctrl} spot={cur.spot!} />
-        )
+      {showSpectate ? (
+        <Spectate s={s} onDone={() => setSpectateDone(true)} />
+      ) : current ? (
+        <GuessCard key={current.sid} s={s} spot={current} />
       ) : (
         <WaitCenter
           title={pendingNames.length ? `Waiting on ${pendingNames.join(' and ')}` : 'Closing the round…'}
           sub="Nothing is revealed until everyone has locked in. That's the whole point."
-          nudgeLabel={g.nudged ? 'Nudged' : 'Nudge them'}
-          nudgeDisabled={g.nudged || !pendingNames.length}
-          onNudge={() => ctrl.nudge()}
         />
       )}
       <PresenceRow
-        players={g.players}
-        doneMap={{ me: g.task >= tasks.length, ...g.botLocked }}
-        label={`${lockedCount}/${g.players.length} locked in`}
+        players={s.players}
+        doneMap={Object.fromEntries(s.players.map((p: any) => [p.id, p.isMe ? allDone : !!s.locked[p.id]]))}
+        label={`${lockedCount}/${s.players.length} locked in`}
       />
     </View>
   );

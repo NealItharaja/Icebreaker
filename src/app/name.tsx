@@ -1,11 +1,13 @@
 // "Two things and you're in." — name + face, and that's the whole profile.
 
+import { useMutation } from 'convex/react';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { api } from '../../convex/_generated/api';
 import { Avatar } from '../components/Avatar';
 import { Btn, Heading, RoundBtn } from '../components/ui';
-import { useGame } from '../game/GameContext';
+import { useRoomSession } from '../game/room';
 import { useAppStore } from '../store/AppStore';
 import { takePendingJoin } from '../store/pending';
 import { useTheme } from '../theme/ThemeContext';
@@ -14,22 +16,34 @@ import { fonts } from '../theme/tokens';
 export default function Name() {
   const { t, sh } = useTheme();
   const { profile, setProfile } = useAppStore();
-  const [, ctrl] = useGame();
+  const { deviceId, enterRoom } = useRoomSession();
+  const joinRoom = useMutation(api.game.joinRoom);
   const router = useRouter();
   const [name, setName] = useState(profile.name);
   const [sym, setSym] = useState(profile.sym || 1);
+  const [busy, setBusy] = useState(false);
 
-  const done = () => {
+  const done = async () => {
     const clean = name.trim();
-    if (!clean) return;
+    if (!clean || busy) return;
     setProfile({ name: clean, sym });
     const code = takePendingJoin();
-    if (code) {
-      ctrl.joinGame({ ...profile, name: clean, sym }, code);
-      router.replace('/lobby');
-    } else {
-      router.replace('/home');
+    if (code && deviceId) {
+      setBusy(true);
+      try {
+        const res = await joinRoom({ code, deviceId, name: clean, sym });
+        if ('roomId' in res && res.roomId) {
+          enterRoom(res.roomId);
+          router.replace('/lobby');
+          return;
+        }
+      } catch {
+        // fall through to home; they can re-enter the code there
+      } finally {
+        setBusy(false);
+      }
     }
+    router.replace('/home');
   };
 
   return (
@@ -101,7 +115,7 @@ export default function Name() {
           })}
         </View>
         <View style={{ flex: 1, minHeight: 22 }} />
-        <Btn label="Done — take me in" size="lg" disabled={!name.trim()} onPress={done} />
+        <Btn label={busy ? 'Walking in…' : 'Done — take me in'} size="lg" disabled={!name.trim() || busy} onPress={done} />
       </ScrollView>
     </KeyboardAvoidingView>
   );

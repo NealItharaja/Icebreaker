@@ -1,13 +1,16 @@
-// The reveal: every answer and every guess at the same moment, Gemma calling it.
+// The reveal: every answer and every guess at once, Gemma calling it.
+// While Gemma judges, skeleton cards hold the layout — no full-screen wait.
 
+import { useMutation } from 'convex/react';
 import React from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import Animated from 'react-native-reanimated';
+import { api } from '../../../convex/_generated/api';
 import { Avatar, GemmaMark } from '../Avatar';
-import { pop, rise, useGrow } from '../motion';
+import { pop, rise, useGrow, useSpin } from '../motion';
+import { SkeletonCard } from '../Skeleton';
 import { Btn, Icon } from '../ui';
-import { GameController, GState } from '../../game/GameContext';
-import { RevealCard, RevealRow } from '../../game/types';
+import { useRoomSession } from '../../game/room';
 import { useTheme } from '../../theme/ThemeContext';
 import { fonts } from '../../theme/tokens';
 
@@ -25,11 +28,12 @@ function Meter({ pct, ok, half }: { pct: number; ok: boolean; half: boolean }) {
   );
 }
 
-function Row({ row }: { row: RevealRow }) {
+function Row({ row, meId }: { row: any; meId: string | null }) {
   const { t } = useTheme();
   const good = row.ok || row.tag === '+55';
   const tagBg = good ? t.accent2_100 : row.isTrap ? t.accent100 : t.divider;
   const tagFg = good ? t.accent2_800 : row.isTrap ? t.accent800 : t.textMuted;
+  const who = row.gid === meId ? 'you' : row.name;
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
       <View style={{ width: 30, height: 30, borderRadius: 15, overflow: 'hidden' }}>
@@ -37,7 +41,7 @@ function Row({ row }: { row: RevealRow }) {
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
         <Text style={{ fontFamily: fonts.body, fontSize: 13.5, lineHeight: 18, color: t.text }}>
-          <Text style={{ color: t.textMuted }}>{row.who} </Text>
+          <Text style={{ color: t.textMuted }}>{who} </Text>
           {row.value}
         </Text>
         {row.meter != null && <Meter pct={row.meter} ok={row.ok} half={row.half} />}
@@ -49,8 +53,18 @@ function Row({ row }: { row: RevealRow }) {
   );
 }
 
-function Card({ card, index }: { card: RevealCard; index: number }) {
+function Card({ card, index, s }: { card: any; index: number; s: any }) {
   const { t, sh } = useTheme();
+  const meId = s.meId;
+  const archetype = s.round?.archetype;
+  const kicker =
+    archetype === 'whose' ? 'an anonymous take' : card.sid === meId ? 'about you' : `about ${card.name}`;
+  const q =
+    archetype === 'whose'
+      ? `“${card.take}”`
+      : card.sid === meId
+        ? s.round?.aboutMe || ''
+        : (s.round?.aboutTemplate || '{name}').replace('{name}', card.name);
   return (
     <Animated.View
       entering={rise(index * 220)}
@@ -71,9 +85,9 @@ function Card({ card, index }: { card: RevealCard; index: number }) {
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={{ fontFamily: fonts.body, fontSize: 11, letterSpacing: 0.75, textTransform: 'uppercase', color: t.textMuted }}>
-            {card.kicker}
+            {kicker}
           </Text>
-          <Text style={{ fontFamily: fonts.bodySemi, fontSize: 15, lineHeight: 19.5, color: t.text }}>{card.q}</Text>
+          <Text style={{ fontFamily: fonts.bodySemi, fontSize: 15, lineHeight: 19.5, color: t.text }}>{q}</Text>
         </View>
       </View>
       <View
@@ -89,11 +103,13 @@ function Card({ card, index }: { card: RevealCard; index: number }) {
         }}
       >
         <Icon name="check" size={15} color={t.accent2_800} strokeWidth={3} />
-        <Text style={{ flex: 1, fontFamily: fonts.bodySemi, fontSize: 14, color: t.accent2_800 }}>{card.truth}</Text>
+        <Text style={{ flex: 1, fontFamily: fonts.bodySemi, fontSize: 14, color: t.accent2_800 }}>
+          {card.sid === meId && archetype === 'whose' ? 'It was you' : card.truth}
+        </Text>
       </View>
       <View style={{ gap: 8 }}>
-        {card.rows.map((row) => (
-          <Row key={row.gid} row={row} />
+        {card.rows.map((row: any) => (
+          <Row key={row.gid} row={row} meId={meId} />
         ))}
       </View>
       <View
@@ -116,13 +132,13 @@ function Card({ card, index }: { card: RevealCard; index: number }) {
       </View>
       {card.pts.length > 0 && (
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 11 }}>
-          {card.pts.map((p, i) => (
+          {card.pts.map((p: any, i: number) => (
             <Animated.View
-              key={`${p}${i}`}
+              key={`${p.text}${i}`}
               entering={pop(400 + i * 80)}
               style={{ paddingVertical: 4, paddingHorizontal: 10, borderRadius: 999, backgroundColor: t.accent100 }}
             >
-              <Text style={{ fontFamily: fonts.body, fontSize: 11, color: t.accent800 }}>{p}</Text>
+              <Text style={{ fontFamily: fonts.body, fontSize: 11, color: t.accent800 }}>{p.text}</Text>
             </Animated.View>
           ))}
         </View>
@@ -131,23 +147,58 @@ function Card({ card, index }: { card: RevealCard; index: number }) {
   );
 }
 
-export function RevealView({ g, ctrl }: { g: GState; ctrl: GameController }) {
+export function RevealView({ s, judging }: { s: any; judging: boolean }) {
   const { t } = useTheme();
+  const { roomId, deviceId } = useRoomSession();
+  const advance = useMutation(api.game.advance);
+  const spin = useSpin(3000);
   return (
     <View style={{ flex: 1 }}>
       <View style={{ paddingTop: 56, paddingHorizontal: 20, paddingBottom: 12 }}>
         <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 9 }}>
           <Text style={{ fontFamily: fonts.heading, fontSize: 30, color: t.text }}>Reveal</Text>
-          <Text style={{ fontFamily: fonts.body, fontSize: 12, color: t.textMuted }}>everyone at once · round {g.r + 1}</Text>
+          <Text style={{ fontFamily: fonts.body, fontSize: 12, color: t.textMuted }}>
+            everyone at once · round {s.room.r + 1}
+          </Text>
         </View>
+        {judging && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 }}>
+            <Animated.View style={spin}>
+              <GemmaMark size={14} color={t.accent} />
+            </Animated.View>
+            <Text style={{ fontFamily: fonts.body, fontSize: 12.5, color: t.textMuted }}>
+              judging by meaning, writing the calls…
+            </Text>
+          </View>
+        )}
       </View>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 12, gap: 14 }}>
-        {(g.cards || []).map((c, i) => (
-          <Card key={c.sid} card={c} index={i} />
-        ))}
+        {judging ? (
+          <>
+            <SkeletonCard />
+            <SkeletonCard />
+            <SkeletonCard />
+          </>
+        ) : (
+          (s.cards || []).map((c: any, i: number) => <Card key={c.sid} card={c} index={i} s={s} />)
+        )}
+        {!judging && (s.cards || []).length === 0 && (
+          <View style={{ borderRadius: 24, backgroundColor: t.surface, padding: 18 }}>
+            <Text style={{ fontFamily: fonts.body, fontSize: 13.5, color: t.textMuted, lineHeight: 20 }}>
+              Nobody sealed an answer in time — the round evaporates. The next one is kinder.
+            </Text>
+          </View>
+        )}
       </ScrollView>
       <View style={{ paddingHorizontal: 20, paddingTop: 10, paddingBottom: 26 }}>
-        <Btn label={g.r < 2 ? 'Standings' : 'Final standings'} size="lg" onPress={() => ctrl.toStandings()} />
+        <Btn
+          label={s.room.r < 2 ? 'Standings' : 'Final standings'}
+          size="lg"
+          disabled={judging}
+          onPress={() => {
+            if (roomId && deviceId) advance({ roomId, deviceId }).catch(() => {});
+          }}
+        />
       </View>
     </View>
   );

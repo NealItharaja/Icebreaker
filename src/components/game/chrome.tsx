@@ -1,28 +1,39 @@
-// Shared round chrome: header + timer, presence row, waiting/burst center.
+// Shared round chrome: header + timer, presence row, waiting center.
 
 import React, { useEffect } from 'react';
 import { Text, View } from 'react-native';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { Avatar, VennLogo } from '../Avatar';
 import { fade, useBurst, useFloat, usePulse } from '../motion';
-import { Btn } from '../ui';
-import { GState } from '../../game/GameContext';
-import { Player } from '../../game/types';
 import { useTheme } from '../../theme/ThemeContext';
 import { fonts } from '../../theme/tokens';
 
-export function RoundHeader({ g, tag, tagTone }: { g: GState; tag: string; tagTone: 'accent' | 'accent2' }) {
+export function RoundHeader({
+  r,
+  tag,
+  tagTone,
+  tleft,
+  pct,
+  showTimer,
+}: {
+  r: number;
+  tag: string;
+  tagTone: 'accent' | 'accent2';
+  tleft: number;
+  pct: number;
+  showTimer: boolean;
+}) {
   const { t } = useTheme();
-  const pct = useSharedValue(100);
+  const w = useSharedValue(100);
   useEffect(() => {
-    pct.value = withTiming((g.tleft / Math.max(1, g.total)) * 100, { duration: 900, easing: Easing.linear });
-  }, [g.tleft, g.total, pct]);
-  const bar = useAnimatedStyle(() => ({ width: `${pct.value}%` }));
-  const urgent = g.tleft <= 8;
+    w.value = withTiming(pct, { duration: 900, easing: Easing.linear });
+  }, [pct, w]);
+  const bar = useAnimatedStyle(() => ({ width: `${w.value}%` }));
+  const urgent = showTimer && tleft <= 8;
   return (
     <View>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-        <Text style={{ fontFamily: fonts.heading, fontSize: 18, color: t.text }}>Round {g.r + 1} of 3</Text>
+        <Text style={{ fontFamily: fonts.heading, fontSize: 18, color: t.text }}>Round {r + 1} of 3</Text>
         <View
           style={{
             paddingVertical: 4,
@@ -44,7 +55,7 @@ export function RoundHeader({ g, tag, tagTone }: { g: GState; tag: string; tagTo
         </View>
         <View style={{ flex: 1 }} />
         <Text style={{ fontFamily: fonts.body, fontSize: 13, color: t.textMuted, fontVariant: ['tabular-nums'] }}>
-          {g.round ? `${g.tleft}s` : ''}
+          {showTimer ? `${tleft}s` : ''}
         </Text>
       </View>
       <View style={{ height: 5, borderRadius: 3, backgroundColor: t.divider, overflow: 'hidden', marginBottom: 16 }}>
@@ -77,7 +88,15 @@ function Dot({ done }: { done: boolean }) {
   );
 }
 
-export function PresenceRow({ players, doneMap, label }: { players: Player[]; doneMap: Record<string, boolean>; label: string }) {
+export function PresenceRow({
+  players,
+  doneMap,
+  label,
+}: {
+  players: { id: string; sym: number }[];
+  doneMap: Record<string, boolean>;
+  label: string;
+}) {
   const { t } = useTheme();
   return (
     <View
@@ -110,19 +129,7 @@ export function PresenceRow({ players, doneMap, label }: { players: Player[]; do
   );
 }
 
-export function WaitCenter({
-  title,
-  sub,
-  nudgeLabel,
-  nudgeDisabled,
-  onNudge,
-}: {
-  title: string;
-  sub: string;
-  nudgeLabel?: string;
-  nudgeDisabled?: boolean;
-  onNudge?: () => void;
-}) {
+export function WaitCenter({ title, sub }: { title: string; sub: string }) {
   const { t } = useTheme();
   const b1 = useBurst(2400, 0);
   const b2 = useBurst(2400, 800);
@@ -140,11 +147,10 @@ export function WaitCenter({
         {title}
       </Text>
       <Text
-        style={{ fontFamily: fonts.body, fontSize: 14, lineHeight: 20, color: t.textMuted, textAlign: 'center', maxWidth: 240, marginBottom: 22 }}
+        style={{ fontFamily: fonts.body, fontSize: 14, lineHeight: 20, color: t.textMuted, textAlign: 'center', maxWidth: 250 }}
       >
         {sub}
       </Text>
-      {onNudge && <Btn label={nudgeLabel || 'Nudge them'} variant="secondary" size="sm" disabled={nudgeDisabled} onPress={onNudge} />}
     </Animated.View>
   );
 }

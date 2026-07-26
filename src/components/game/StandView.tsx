@@ -1,14 +1,14 @@
 // Standings — accuracy on one track, overlaps found on the other.
 
+import { useMutation } from 'convex/react';
 import React from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import Animated from 'react-native-reanimated';
-import { useRouter } from 'expo-router';
+import { api } from '../../../convex/_generated/api';
 import { Avatar, GemmaMark } from '../Avatar';
 import { pop, useGrow } from '../motion';
 import { Btn, Heading, Kicker } from '../ui';
-import { GameController, GState } from '../../game/GameContext';
-import { unionOverlaps } from '../../game/engine';
+import { useRoomSession } from '../../game/room';
 import { useTheme } from '../../theme/ThemeContext';
 import { fonts } from '../../theme/tokens';
 
@@ -22,25 +22,33 @@ function BoardBar({ pct, leader }: { pct: number; leader: boolean }) {
   );
 }
 
-export function StandView({ g, ctrl }: { g: GState; ctrl: GameController }) {
+export function StandView({ s }: { s: any }) {
   const { t } = useTheme();
-  const router = useRouter();
-  const max = Math.max(100, ...g.players.map((p) => g.scores[p.id] || 0));
-  const sorted = g.players.slice().sort((a, b) => (g.scores[b.id] || 0) - (g.scores[a.id] || 0));
-  const ov = unionOverlaps(g.pairs);
+  const { roomId, deviceId } = useRoomSession();
+  const advance = useMutation(api.game.advance);
+  const scores: Record<string, number> = s.room.scores || {};
+  const deltas: Record<string, number> = s.room.deltas || {};
+  const max = Math.max(100, ...s.players.map((p: any) => scores[p.id] || 0));
+  const sorted = [...s.players].sort((a: any, b: any) => (scores[b.id] || 0) - (scores[a.id] || 0));
+  const ov: string[] = [];
+  Object.values(s.room.pairs || {}).forEach((items: any) =>
+    (items as string[]).forEach((o) => {
+      if (!ov.some((x) => x.toLowerCase() === o.toLowerCase())) ov.push(o);
+    }),
+  );
 
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ flexGrow: 1, paddingTop: 56, paddingHorizontal: 22, paddingBottom: 26 }}>
-      <Kicker>after round {g.r + 1}</Kicker>
+      <Kicker>after round {s.room.r + 1}</Kicker>
       <Heading size={31} style={{ marginTop: 3, marginBottom: 20 }}>
         Two things are being counted
       </Heading>
       <View style={{ borderRadius: 26, backgroundColor: t.surface, padding: 17, marginBottom: 12 }}>
         <Kicker style={{ marginBottom: 14 }}>who knows the room</Kicker>
         <View style={{ gap: 12 }}>
-          {sorted.map((p, i) => {
-            const score = g.scores[p.id] || 0;
-            const delta = g.deltas[p.id] || 0;
+          {sorted.map((p: any, i: number) => {
+            const score = scores[p.id] || 0;
+            const delta = deltas[p.id] || 0;
             return (
               <View key={p.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 11 }}>
                 <View style={{ width: 34, height: 34, borderRadius: 17, overflow: 'hidden' }}>
@@ -49,7 +57,7 @@ export function StandView({ g, ctrl }: { g: GState; ctrl: GameController }) {
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
                     <Text style={{ fontFamily: fonts.bodySemi, fontSize: 14, color: t.text }}>
-                      {p.id === 'me' ? `${p.name} (you)` : p.name}
+                      {p.isMe ? `${p.name} (you)` : p.name}
                     </Text>
                     <Text style={{ fontFamily: fonts.body, fontSize: 12.5, color: t.textMuted, fontVariant: ['tabular-nums'] }}>
                       {score} {delta > 0 && <Text style={{ color: t.accent700 }}>+{delta}</Text>}
@@ -87,17 +95,15 @@ export function StandView({ g, ctrl }: { g: GState; ctrl: GameController }) {
           <GemmaMark size={15} color={t.accent} />
         </View>
         <Text style={{ flex: 1, fontFamily: fonts.body, fontSize: 14, lineHeight: 21, fontStyle: 'italic', color: t.text, opacity: 0.9 }}>
-          {g.midNote}
+          {s.room.mid}
         </Text>
       </View>
       <View style={{ flex: 1, minHeight: 10 }} />
       <Btn
-        label={g.r < 2 ? `Round ${g.r + 2} →` : 'See the results'}
+        label={s.room.r < 2 ? `Round ${s.room.r + 2} →` : 'See the results'}
         size="lg"
         onPress={() => {
-          const last = g.r >= 2;
-          ctrl.nextRound();
-          if (last) router.replace('/final');
+          if (roomId && deviceId) advance({ roomId, deviceId }).catch(() => {});
         }}
       />
     </ScrollView>

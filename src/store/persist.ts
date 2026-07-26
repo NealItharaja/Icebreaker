@@ -10,11 +10,19 @@ const K = {
 
 export type Profile = { name: string; sym: number; floor: string };
 
-/** What survives between games: who you've played with and what you share. */
+export type MetPerson = {
+  name: string;
+  sym: number;
+  isAi: boolean;
+  games: number;
+  overlaps: string[];
+};
+
+/** What survives between games: who you've actually played with. */
 export type World = {
   gamesPlayed: number;
-  /** per bot id: games played together + accumulated overlap labels */
-  met: Record<string, { games: number; overlaps: string[] }>;
+  /** keyed by stable player key (device uuid or ai:<seed>) */
+  met: Record<string, MetPerson>;
 };
 
 export type Plan = {

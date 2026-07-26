@@ -1,22 +1,24 @@
 // "Behind the model" — the real prompt, the real output, real latency.
-// Nothing mocked: this reads the actual telemetry log of the session.
+// Reads the server-side telemetry log; nothing is mocked.
 
+import { useQuery } from 'convex/react';
 import React from 'react';
 import { ScrollView, Text, View } from 'react-native';
-import { gemmaLog, lastExchange, MODEL, p50Latency } from '../../gemma/client';
+import { api } from '../../../convex/_generated/api';
 import { useTheme } from '../../theme/ThemeContext';
 import { fonts } from '../../theme/tokens';
 import { GemmaMark } from '../Avatar';
+import { Skeleton } from '../Skeleton';
 import { Kicker, RoundBtn, Sheet } from '../ui';
 
 export function BehindSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { t } = useTheme();
-  const last = lastExchange();
-  const p50 = p50Latency();
-  const liveCalls = gemmaLog().filter((l) => l.mode === 'live').length;
+  const status = useQuery(api.game.gemmaStatus, visible ? {} : 'skip');
+  const data = useQuery(api.game.gemmaLast, visible ? {} : 'skip');
+  const last = data?.last;
   const stats = [
-    { v: MODEL.replace('google/', '').replace('-it', ''), k: 'model' },
-    { v: p50 != null ? `${p50}ms` : '—', k: 'p50 latency' },
+    { v: (status?.model || 'gemma-4').replace('google/', '').replace('-it', ''), k: 'model' },
+    { v: data?.p50 != null ? `${data.p50}ms` : '—', k: 'p50 latency' },
     { v: last ? (last.tokens ? `${last.tokens >= 1000 ? (last.tokens / 1000).toFixed(1) + 'k' : last.tokens}` : last.mode) : '—', k: 'tokens last call' },
   ];
   const mono = { fontFamily: fonts.mono, fontSize: 11.5, lineHeight: 18.5 } as const;
@@ -28,7 +30,8 @@ export function BehindSheet({ visible, onClose }: { visible: boolean; onClose: (
         <View style={{ flex: 1 }}>
           <Text style={{ fontFamily: fonts.heading, fontSize: 20, color: t.text }}>Behind the model</Text>
           <Text style={{ fontFamily: fonts.body, fontSize: 11.5, color: t.textMuted }}>
-            {MODEL} · via openrouter · {liveCalls ? `${liveCalls} live calls` : 'offline — no key yet'}
+            {status?.model || 'gemma 4'} · runs server-side ·{' '}
+            {status?.live ? `${data?.liveCalls ?? 0} live calls` : 'offline — no key on the server'}
           </Text>
         </View>
         <RoundBtn icon="x" size={34} onPress={onClose} />
@@ -44,7 +47,14 @@ export function BehindSheet({ visible, onClose }: { visible: boolean; onClose: (
             </View>
           ))}
         </View>
-        {last ? (
+        {data === undefined ? (
+          <View style={{ gap: 10 }}>
+            <Skeleton width="40%" height={11} />
+            <Skeleton width="100%" height={120} radius={18} />
+            <Skeleton width="45%" height={11} />
+            <Skeleton width="100%" height={90} radius={18} />
+          </View>
+        ) : last ? (
           <>
             <Kicker style={{ marginBottom: 8 }}>what we sent · {last.task}</Kicker>
             <View style={{ borderRadius: 18, backgroundColor: t.vSunk, padding: 14, marginBottom: 16 }}>
@@ -60,12 +70,12 @@ export function BehindSheet({ visible, onClose }: { visible: boolean; onClose: (
         ) : (
           <View style={{ borderRadius: 18, backgroundColor: t.surface, padding: 16 }}>
             <Text style={{ fontFamily: fonts.body, fontSize: 13.5, color: t.textMuted, lineHeight: 20 }}>
-              Nothing yet. Start a game — every question, lie, judgment and card in Venn is one visible call to Gemma 4, and the latest one shows up here.
+              Nothing yet. Open a room — every question, lie, judgment and card in Venn is one visible call to Gemma 4, and the latest one shows up here.
             </Text>
           </View>
         )}
         <Text style={{ fontFamily: fonts.body, fontSize: 12, color: t.textMuted, lineHeight: 18, marginTop: 14 }}>
-          Answers are sent one round at a time and dropped when the game ends. Nothing is kept, and there is no profile to leak.
+          The key lives on the server, never in this app. Answers are sent one round at a time and dropped when the game ends — there is no profile to leak.
         </Text>
       </ScrollView>
     </Sheet>

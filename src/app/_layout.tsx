@@ -1,15 +1,20 @@
 import { Caprasimo_400Regular } from '@expo-google-fonts/caprasimo';
 import { Figtree_400Regular, Figtree_600SemiBold, Figtree_700Bold } from '@expo-google-fonts/figtree';
+import { ConvexProvider, ConvexReactClient } from 'convex/react';
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import React, { useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { GameProvider } from '../game/GameContext';
+import { RoomProvider } from '../game/room';
 import { AppStoreProvider, useAppStore } from '../store/AppStore';
 import { ThemeProvider, useTheme } from '../theme/ThemeContext';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
+
+const convex = new ConvexReactClient(process.env.EXPO_PUBLIC_CONVEX_URL as string, {
+  unsavedChangesWarning: false,
+});
 
 function Nav() {
   const { t, dark } = useTheme();
@@ -42,12 +47,14 @@ export default function RootLayout() {
   });
   if (!fontsLoaded) return null;
   return (
-    <ThemeProvider>
-      <AppStoreProvider>
-        <GameProvider>
-          <Nav />
-        </GameProvider>
-      </AppStoreProvider>
-    </ThemeProvider>
+    <ConvexProvider client={convex}>
+      <ThemeProvider>
+        <AppStoreProvider>
+          <RoomProvider>
+            <Nav />
+          </RoomProvider>
+        </AppStoreProvider>
+      </ThemeProvider>
+    </ConvexProvider>
   );
 }

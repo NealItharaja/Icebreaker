@@ -1,15 +1,17 @@
-// Winner + what the room actually shares (venn for ≤3, ring graph for more).
+// Winner + what the room actually shares — computed from the live room.
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Redirect, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import Svg, { Circle, Line, Path, Text as SvgText } from 'react-native-svg';
+import { pairKey } from '../../convex/lib';
 import { Avatar } from '../components/Avatar';
 import { fade, pop, rise, useBurstOnce, useFloat, useGrow } from '../components/motion';
 import { Btn, Kicker } from '../components/ui';
-import { ringGeo, regionList, unionOverlaps, vennGeo } from '../game/engine';
-import { useGame } from '../game/GameContext';
+import { ringGeo, regionList, vennGeo } from '../game/engine';
+import { useRoom, useRoomSession } from '../game/room';
 import { useAppStore } from '../store/AppStore';
 import { useTheme } from '../theme/ThemeContext';
 import { fonts } from '../theme/tokens';
@@ -58,28 +60,57 @@ function ScoreRow({ rank, sym, name, score, pct, leader, blurb, delay }: any) {
 
 export default function Final() {
   const { t, sh } = useTheme();
-  const [g, ctrl] = useGame();
+  const s = useRoom();
+  const { roomId, clearRoom } = useRoomSession();
   const { recordGame } = useAppStore();
   const router = useRouter();
   const [tab, setTab] = useState<'scores' | 'over'>('scores');
 
-  // the night survives: merge this game into the floor map exactly once
+  // the night survives: merge this real room into the floor map exactly once
   useEffect(() => {
-    const rec = ctrl.takeRecord();
-    if (rec) recordGame(rec.botIds, rec.pairs);
+    if (!s || s.room.phase !== 'final' || !roomId || !s.meId) return;
+    const flag = `venn.recorded.${roomId}`;
+    AsyncStorage.getItem(flag).then((done) => {
+      if (done) return;
+      AsyncStorage.setItem(flag, '1').catch(() => {});
+      const pairs: Record<string, string[]> = s.room.pairs || {};
+      const others = s.players.filter((p) => !p.isMe);
+      recordGame(
+        others.map((p) => ({ key: p.key, name: p.name, sym: p.sym, isAi: p.isAi })),
+        Object.fromEntries(others.map((p) => [p.key, pairs[pairKey(s.meId!, p.id)] || []])),
+      );
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [s?.room.phase, roomId, s?.meId]);
 
-  if (g.phase === 'idle' || !g.played) return <Redirect href="/home" />;
+  if (!roomId) return <Redirect href="/home" />;
+  if (s === undefined) return <View style={{ flex: 1, backgroundColor: t.bg }} />;
+  if (s === null || s.room.phase === 'closed') {
+    clearRoom();
+    return <Redirect href="/home" />;
+  }
+  if (s.room.phase !== 'final') return <Redirect href="/game" />;
 
-  const sorted = g.players.slice().sort((a, b) => (g.scores[b.id] || 0) - (g.scores[a.id] || 0));
+  const scores: Record<string, number> = s.room.scores || {};
+  const pairs: Record<string, string[]> = s.room.pairs || {};
+  const me = s.players.find((p) => p.isMe);
+  const sorted = [...s.players].sort((a, b) => (scores[b.id] || 0) - (scores[a.id] || 0));
   const winner = sorted[0];
-  const max = Math.max(100, ...sorted.map((p) => g.scores[p.id] || 0));
-  const overlap = ctrl.overlap;
-  const venn = g.players.length <= 3 ? vennGeo(g.players, overlap) : null;
-  const ring = g.players.length > 3 ? ringGeo(g.players, overlap) : null;
-  const myAnswers = g.answersByRound.map((a) => a?.me).filter(Boolean) as string[];
-  const regions = regionList(g.players, overlap, myAnswers);
+  const max = Math.max(100, ...sorted.map((p) => scores[p.id] || 0));
+
+  // geometry uses 'me' as the anchor id like the design did
+  const geoPlayers = [
+    { id: 'me', name: me?.name || 'You', sym: me?.sym || 1 },
+    ...s.players.filter((p) => !p.isMe).map((p) => ({ id: p.id, name: p.name, sym: p.sym })),
+  ];
+  const overlap = (a: string, b: string) => {
+    const A = a === 'me' ? s.meId! : a;
+    const B = b === 'me' ? s.meId! : b;
+    return pairs[pairKey(A, B)] || [];
+  };
+  const venn = geoPlayers.length <= 3 ? vennGeo(geoPlayers as any, overlap) : null;
+  const ring = geoPlayers.length > 3 ? ringGeo(geoPlayers as any, overlap) : null;
+  const regions = regionList(geoPlayers as any, overlap, s.myAnswers || []);
 
   const vennFill = (role: string) =>
     role === 'a' ? t.accent : role === 'b' ? t.accent2 : role === 'c' ? t.neutral400 : t.text;
@@ -97,16 +128,16 @@ export default function Final() {
             <Burst delay={560} color={t.accent} />
             <Crown color={t.accent} />
             <Animated.View entering={pop(350)} style={[{ width: 108, height: 108, borderRadius: 54, overflow: 'hidden' }, sh.lg]}>
-              <Avatar sym={winner.sym} size={108} />
+              <Avatar sym={winner?.sym || 1} size={108} />
             </Animated.View>
           </View>
           <Animated.View entering={rise(700)} style={{ alignItems: 'center' }}>
             <Kicker style={{ marginTop: 8 }}>knew the room best</Kicker>
             <Text style={{ fontFamily: fonts.heading, fontSize: 40, lineHeight: 44, color: t.text, marginTop: 4, marginBottom: 2 }}>
-              {winner.id === 'me' ? 'You' : winner.name}
+              {winner?.isMe ? 'You' : winner?.name}
             </Text>
             <Text style={{ fontFamily: fonts.body, fontSize: 14, color: t.textMuted }}>
-              {g.scores[winner.id] || 0} points · {winner.id === 'me' ? 'you were paying attention' : 'suspiciously observant'}
+              {scores[winner?.id || ''] || 0} points · {winner?.isMe ? 'you were paying attention' : 'suspiciously observant'}
             </Text>
           </Animated.View>
         </View>
@@ -146,9 +177,9 @@ export default function Final() {
                 key={p.id}
                 rank={i + 1}
                 sym={p.sym}
-                name={p.id === 'me' ? `${p.name} (you)` : p.name}
-                score={g.scores[p.id] || 0}
-                pct={Math.round(((g.scores[p.id] || 0) / max) * 100)}
+                name={p.isMe ? `${p.name} (you)` : p.name}
+                score={scores[p.id] || 0}
+                pct={Math.round(((scores[p.id] || 0) / max) * 100)}
                 leader={i === 0}
                 blurb={i === 0 ? 'read the room all night' : i === sorted.length - 1 ? 'made up for it in overlaps' : 'solid, with one catastrophic guess'}
                 delay={i * 80}
@@ -200,7 +231,7 @@ export default function Final() {
               {regions.length === 0 && (
                 <View style={{ borderRadius: 22, backgroundColor: t.surface, padding: 15 }}>
                   <Text style={{ fontFamily: fonts.body, fontSize: 13, color: t.textMuted, lineHeight: 19 }}>
-                    No overlaps surfaced tonight. Rare — and honestly more interesting. Play one more round set.
+                    No overlaps surfaced tonight. Rare — and honestly more interesting. Run it back.
                   </Text>
                 </View>
               )}
@@ -236,14 +267,7 @@ export default function Final() {
         )}
       </ScrollView>
       <View style={{ paddingHorizontal: 22, paddingTop: 10, paddingBottom: 26 }}>
-        <Btn
-          label="Your card from gemma"
-          size="lg"
-          onPress={() => {
-            ctrl.buildShare();
-            router.push('/share');
-          }}
-        />
+        <Btn label="Your card from gemma" size="lg" onPress={() => router.push('/share')} />
       </View>
     </View>
   );

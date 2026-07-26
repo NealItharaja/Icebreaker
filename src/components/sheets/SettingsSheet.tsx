@@ -1,9 +1,7 @@
 // "You, briefly" — name, face, floor, appearance. No profile beyond this.
 
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
-import { setRuntimeKey } from '../../gemma/client';
-import { loadApiKey, saveApiKey } from '../../store/persist';
 import { useAppStore } from '../../store/AppStore';
 import { useTheme } from '../../theme/ThemeContext';
 import { fonts } from '../../theme/tokens';
@@ -21,17 +19,6 @@ export function SettingsSheet({
 }) {
   const { t, dark, toggle } = useTheme();
   const { profile, setProfile } = useAppStore();
-  const [key, setKey] = useState('');
-  const [keyLoaded, setKeyLoaded] = useState(false);
-
-  useEffect(() => {
-    if (visible && !keyLoaded) {
-      loadApiKey().then((k) => {
-        setKey(k || '');
-        setKeyLoaded(true);
-      });
-    }
-  }, [visible, keyLoaded]);
 
   const label = { fontFamily: fonts.body, fontSize: 12, color: t.textMuted, marginBottom: 5 } as const;
   const input = {
@@ -117,23 +104,6 @@ export function SettingsSheet({
           >
             <Text style={{ fontFamily: fonts.body, fontSize: 13.5, color: t.text }}>{dark ? 'Dark' : 'Light'}</Text>
           </Pressable>
-        </View>
-        <View style={{ marginBottom: 6 }}>
-          <Text style={label}>OpenRouter key · unlocks live Gemma 4</Text>
-          <TextInput
-            value={key}
-            onChangeText={(v) => {
-              setKey(v);
-              const trimmed = v.trim();
-              saveApiKey(trimmed);
-              setRuntimeKey(trimmed || null);
-            }}
-            style={[input, { fontSize: 13 }]}
-            placeholderTextColor={t.textFaint}
-            placeholder="sk-or-…  (blank = offline mode)"
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
         </View>
         <Btn label="Behind the model" variant="ghost" size="sm" onPress={onOpenBehind} style={{ marginTop: 8 }} />
       </ScrollView>
